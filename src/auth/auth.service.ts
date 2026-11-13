@@ -19,6 +19,6 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
     if (!user || !ok) throw new UnauthorizedException("Identifiants invalides");
     const payload: JwtPayload = { sub: user.id, username: user.username };
-    return { token: await this.jwt.signAsync(payload), user: { id: user.id, username: user.username } };
+    return { token: await this.jwt.signAsync(payload), user: { id: user.id, username: user.username, role: user.role } };
   }
 }

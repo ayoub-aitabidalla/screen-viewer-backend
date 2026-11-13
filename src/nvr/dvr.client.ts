@@ -1,0 +1,195 @@
+import { XMLBuilder, XMLParser } from "fast-xml-parser";
+import { DigestFetch } from "./digest";
+
+const NS = "http://www.hikvision.com/ver20/XMLSchema";
+
+export interface DvrConfig {
+  host: string; // ex. "192.168.8.64" ou "192.168.8.64:80"
+  user: string;
+  password: string;
+  timeoutMs?: number;
+}
+
+export interface DvrDeviceInfo {
+  deviceName: string;
+  model: string;
+  serialNumber: string;
+  firmwareVersion: string;
+  deviceType: string;
+}
+
+export interface DvrChannel {
+  id: number;
+  name: string;
+  protocol: string;
+  ipAddress: string;
+  port: number;
+  srcInputPort: number;
+  userName: string;
+}
+
+export interface DvrChannelStatus {
+  id: number;
+  online: boolean;
+  detail: string;
+}
+
+/** Paramètres d'un canal IP ONVIF (le mot de passe est écrit, jamais relu : le DVR ne le renvoie pas). */
+export interface DvrChannelInput {
+  id: number;
+  name: string;
+  ipAddress: string;
+  port: number;
+  srcInputPort: number;
+  userName: string;
+  password: string;
+}
+
+const SUB_STATUS_FR: Record<string, string> = {
+  channelNumExceed: "nombre maximum de canaux IP atteint",
+  maxIPCNumberExceeded: "nombre maximum de caméras IP atteint",
+  IPCExists: "cette caméra est déjà ajoutée",
+  ipAddressConflict: "adresse IP déjà utilisée par un autre canal",
+  deviceBusy: "le DVR est occupé, réessayez",
+  invalidOperation: "opération refusée",
+  notSupport: "opération non supportée par ce DVR",
+  noPermission: "droits insuffisants pour le compte du backend",
+  badXmlContent: "requête invalide (contenu XML)",
+  badParameters: "paramètres invalides",
+  passwordLengthError: "mot de passe ONVIF invalide (8 à 16 caractères)",
+};
+
+/** Erreur renvoyée par le DVR (ResponseStatus ISAPI) ou par le transport. */
+export class DvrError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number,
+    readonly statusString?: string,
+    readonly subStatusCode?: string,
+    readonly raw?: string,
+  ) {
+    super(message);
+  }
+}
+
+const parser = new XMLParser({ ignoreAttributes: true, parseTagValue: false, removeNSPrefix: true });
+const builder = new XMLBuilder({ ignoreAttributes: false, format: false, suppressEmptyNode: false });
+
+const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
+const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
+
+/** Client ISAPI minimal pour un DVR/NVR Hikvision. */
+export class DvrClient {
+  private readonly http: DigestFetch;
+  private readonly base: string;
+
+  constructor(private readonly cfg: DvrConfig) {
+    this.http = new DigestFetch(cfg.user, cfg.password);
+    this.base = `http://${cfg.host}`;
+  }
+
+  private async request(method: string, path: string, body?: string): Promise<any> {
+    let res: Response;
+    try {
+      res = await this.http.fetch(this.base + path, {
+        method,
+        body,
+        headers: body ? { "Content-Type": "application/xml; charset=UTF-8" } : undefined,
+        signal: AbortSignal.timeout(this.cfg.timeoutMs ?? 8000),
+      });
+    } catch (e) {
+      throw new DvrError(`DVR injoignable (${this.cfg.host}) : ${(e as Error).message}`, 0);
+    }
+    const text = await res.text();
+    const doc = text.trim().startsWith("<") ? parser.parse(text) : {};
+    const rs = doc.ResponseStatus;
+    const failedStatus = rs && str(rs.statusCode) !== "1" && str(rs.statusCode) !== "";
+    if (!res.ok || failedStatus) {
+      if (res.status === 401) throw new DvrError("Identifiants du DVR refusés", 401, undefined, undefined, text);
+      const sub = str(rs?.subStatusCode);
+      const statusString = str(rs?.statusString);
+      const reason = SUB_STATUS_FR[sub] ?? (statusString || `HTTP ${res.status}`);
+      throw new DvrError(`Le DVR a refusé l'opération : ${reason}`, res.status, statusString, sub || undefined, text);
+    }
+    return doc;
+  }
+
+  async deviceInfo(): Promise<DvrDeviceInfo> {
+    const d = (await this.request("GET", "/ISAPI/System/deviceInfo")).DeviceInfo ?? {};
+    return {
+      deviceName: str(d.deviceName),
+      model: str(d.model),
+      serialNumber: str(d.serialNumber),
+      firmwareVersion: str(d.firmwareVersion),
+      deviceType: str(d.deviceType),
+    };
+  }
+
+  async listChannels(): Promise<DvrChannel[]> {
+    const doc = await this.request("GET", "/ISAPI/ContentMgmt/InputProxy/channels");
+    return asArray<any>(doc.InputProxyChannelList?.InputProxyChannel).map((c) => {
+      const s = c.sourceInputPortDescriptor ?? {};
+      return {
+        id: Number(c.id),
+        name: str(c.name),
+        protocol: str(s.proxyProtocol),
+        ipAddress: str(s.ipAddress || s.hostName),
+        port: Number(s.managePortNo ?? 0),
+        srcInputPort: Number(s.srcInputPort ?? 1),
+        userName: str(s.userName),
+      };
+    });
+  }
+
+  async channelStatus(): Promise<DvrChannelStatus[]> {
+    const doc = await this.request("GET", "/ISAPI/ContentMgmt/InputProxy/channels/status");
+    return asArray<any>(doc.InputProxyChannelStatusList?.InputProxyChannelStatus).map((c) => ({
+      id: Number(c.id),
+      online: str(c.online) === "true",
+      detail: str(c.chanDetectResult),
+    }));
+  }
+
+  private channelXml(c: DvrChannelInput): string {
+    return builder.build({
+      InputProxyChannel: {
+        "@_version": "1.0",
+        "@_xmlns": NS,
+        id: c.id,
+        name: c.name,
+        sourceInputPortDescriptor: {
+          proxyProtocol: "ONVIF",
+          addressingFormatType: "ipaddress",
+          ipAddress: c.ipAddress,
+          managePortNo: c.port,
+          srcInputPort: c.srcInputPort,
+          userName: c.userName,
+          password: c.password,
+          streamType: "tcp",
+        },
+      },
+    });
+  }
+
+  /**
+   * Ajoute un canal IP. Attention : ce DVR choisit lui-même l'id et le nom du canal (il ignore ceux envoyés).
+   * Renvoie l'id réellement attribué, déduit en comparant la liste des canaux avant/après.
+   */
+  async addChannel(c: DvrChannelInput): Promise<number> {
+    const before = new Set((await this.listChannels()).map((x) => x.id));
+    // ResponseStatus.id ne correspond pas au numéro du canal sur ce firmware : on compare la liste avant/après.
+    await this.request("POST", "/ISAPI/ContentMgmt/InputProxy/channels", this.channelXml(c));
+    const added = (await this.listChannels()).filter((x) => !before.has(x.id));
+    if (added.length !== 1) throw new DvrError("Canal ajouté mais id attribué par le DVR introuvable", 0);
+    return added[0].id;
+  }
+
+  async updateChannel(c: DvrChannelInput): Promise<void> {
+    await this.request("PUT", `/ISAPI/ContentMgmt/InputProxy/channels/${c.id}`, this.channelXml(c));
+  }
+
+  /** Retire le canal IP. N'efface pas les enregistrements déjà présents sur le disque. */
+  async deleteChannel(id: number): Promise<void> {
+    await this.request("DELETE", `/ISAPI/ContentMgmt/InputProxy/channels/${id}`);
+  }
+}

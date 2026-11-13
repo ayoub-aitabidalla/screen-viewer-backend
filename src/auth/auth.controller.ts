@@ -42,6 +42,6 @@ export class AuthController {
   async me(@Req() req: Request & { user: JwtPayload }) {
     const user = await this.users.findById(req.user.sub);
     if (!user) throw new UnauthorizedException();
-    return { user: { id: user.id, username: user.username } };
+    return { user: { id: user.id, username: user.username, role: user.role } };
   }
 }

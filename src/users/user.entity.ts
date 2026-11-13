@@ -12,6 +12,10 @@ export class User {
   @Column({ name: "password_hash", select: false })
   passwordHash: string;
 
+  /** admin : peut configurer les caméras ; viewer : consultation seule. */
+  @Column({ type: "varchar", length: 16, default: "admin" })
+  role: "admin" | "viewer";
+
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
 }

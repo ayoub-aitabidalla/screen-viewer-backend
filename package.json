@@ -7,7 +7,8 @@
     "start": "node dist/main.js",
     "dev": "ts-node src/main.ts",
     "seed": "ts-node src/database/seed.ts",
-    "db:up": "docker compose up -d"
+    "db:up": "docker compose up -d",
+    "dvr:probe": "ts-node src/scripts/dvr-probe.ts"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +26,7 @@
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
     "dotenv": "^18.0.10",
+    "fast-xml-parser": "^4.5.0",
     "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
