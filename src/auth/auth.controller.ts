@@ -6,6 +6,7 @@ import { AUTH_COOKIE } from "./auth.constants";
 import { AuthService } from "./auth.service";
 import type { JwtPayload } from "./jwt-auth.guard";
 import { LoginDto } from "./login.dto";
+import { SignupDto } from "./signup.dto";
 import { Public } from "./public.decorator";
 
 @Controller("auth")
@@ -16,11 +17,7 @@ export class AuthController {
     private readonly config: ConfigService,
   ) {}
 
-  @Public()
-  @Post("login")
-  @HttpCode(200)
-  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
-    const { token, user } = await this.auth.login(dto.username, dto.password);
+  private setCookie(res: Response, token: string) {
     res.cookie(AUTH_COOKIE, token, {
       httpOnly: true,
       sameSite: "strict",
@@ -28,6 +25,24 @@ export class AuthController {
       path: "/",
       // Pas de maxAge : cookie de session ; l'expiration réelle est celle du JWT (JWT_EXPIRES_IN).
     });
+  }
+
+  @Public()
+  @Post("login")
+  @HttpCode(200)
+  async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    const { token, user } = await this.auth.login(dto.username, dto.password);
+    this.setCookie(res, token);
+    return { user };
+  }
+
+  /** Création d'un compte client (client + premier administrateur) ; ouvre directement la session. */
+  @Public()
+  @Post("signup")
+  @HttpCode(201)
+  async signup(@Body() dto: SignupDto, @Res({ passthrough: true }) res: Response) {
+    const { token, user } = await this.auth.signup(dto.organization.trim(), dto.username.trim(), dto.password);
+    this.setCookie(res, token);
     return { user };
   }
 
@@ -42,6 +57,6 @@ export class AuthController {
   async me(@Req() req: Request & { user: JwtPayload }) {
     const user = await this.users.findById(req.user.sub);
     if (!user) throw new UnauthorizedException();
-    return { user: { id: user.id, username: user.username, role: user.role } };
+    return { user: { id: user.id, username: user.username, role: user.role, tenantId: user.tenantId } };
   }
 }

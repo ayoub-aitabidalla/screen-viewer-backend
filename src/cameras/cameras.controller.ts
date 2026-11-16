@@ -1,51 +1,58 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { AdminGuard } from "../auth/admin.guard";
+import { TenantId } from "../auth/tenant.decorator";
 import { CreateCameraDto, UpdateCameraDto } from "./camera.dto";
 import { CamerasService } from "./cameras.service";
 
-/** Configuration des postes comme caméras IP du DVR. Lecture : tout utilisateur connecté ; écriture : admin. */
+/** ?dvrId= facultatif : absent = unique DVR du client. */
+const OptionalUuid = new ParseUUIDPipe({ optional: true });
+
+/**
+ * Configuration des postes comme caméras IP des DVR du client connecté.
+ * Lecture : tout utilisateur du client ; écriture : admin du client.
+ */
 @Controller("cameras")
 export class CamerasController {
   constructor(private readonly cameras: CamerasService) {}
 
   @Get()
-  list() {
-    return this.cameras.list();
+  list(@TenantId() t: string, @Query("dvrId", OptionalUuid) dvrId?: string) {
+    return this.cameras.list(t, dvrId);
   }
 
   @Get("dvr")
-  dvr() {
-    return this.cameras.dvrInfo();
+  dvr(@TenantId() t: string, @Query("dvrId", OptionalUuid) dvrId?: string) {
+    return this.cameras.dvrInfo(t, dvrId);
   }
 
   @Get("available-streams")
-  available() {
-    return this.cameras.availableStreams();
+  available(@TenantId() t: string, @Query("dvrId", OptionalUuid) dvrId?: string) {
+    return this.cameras.availableStreams(t, dvrId);
   }
 
   @Post()
   @UseGuards(AdminGuard)
-  create(@Body() dto: CreateCameraDto) {
-    return this.cameras.create(dto);
+  create(@TenantId() t: string, @Body() dto: CreateCameraDto) {
+    return this.cameras.create(t, dto);
   }
 
   @Patch(":id")
   @UseGuards(AdminGuard)
-  update(@Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateCameraDto) {
-    return this.cameras.update(id, dto);
+  update(@TenantId() t: string, @Param("id", ParseUUIDPipe) id: string, @Body() dto: UpdateCameraDto) {
+    return this.cameras.update(t, id, dto);
   }
 
   @Delete(":id")
   @UseGuards(AdminGuard)
   @HttpCode(204)
-  remove(@Param("id", ParseUUIDPipe) id: string) {
-    return this.cameras.remove(id);
+  remove(@TenantId() t: string, @Param("id", ParseUUIDPipe) id: string) {
+    return this.cameras.remove(t, id);
   }
 
   @Post("sync")
   @UseGuards(AdminGuard)
   @HttpCode(200)
-  sync() {
-    return this.cameras.sync();
+  sync(@TenantId() t: string, @Query("dvrId", OptionalUuid) dvrId?: string) {
+    return this.cameras.sync(t, dvrId);
   }
 }

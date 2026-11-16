@@ -7,6 +7,8 @@
     "start": "node dist/main.js",
     "dev": "ts-node src/main.ts",
     "seed": "ts-node src/database/seed.ts",
+    "migrate:tenancy": "ts-node src/database/migrate-tenancy.ts",
+    "migrate:gateways": "ts-node src/database/migrate-gateways.ts",
     "db:up": "docker compose up -d",
     "dvr:probe": "ts-node src/scripts/dvr-probe.ts"
   },

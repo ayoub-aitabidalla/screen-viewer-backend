@@ -10,7 +10,9 @@ export class AdminGuard implements CanActivate {
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest<{ user?: JwtPayload }>();
     const user = req.user ? await this.users.findById(req.user.sub) : null;
-    if (user?.role !== "admin") throw new ForbiddenException({ message: "Réservé aux administrateurs", code: null });
+    // Rôle et client relus en base : un compte rétrogradé ou déplacé perd ses droits sans attendre l'expiration du JWT.
+    if (user?.role !== "admin" || user.tenantId !== req.user?.tenantId)
+      throw new ForbiddenException({ message: "Réservé aux administrateurs du client", code: null });
     return true;
   }
 }

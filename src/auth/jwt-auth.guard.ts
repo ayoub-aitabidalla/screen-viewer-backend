@@ -7,6 +7,7 @@ import { AUTH_COOKIE, IS_PUBLIC } from "./auth.constants";
 export interface JwtPayload {
   sub: string;
   username: string;
+  tenantId: string;
 }
 
 /** Guard global : toute route exige un JWT valide (cookie ou en-tête Bearer), sauf celles marquées @Public(). */
@@ -24,7 +25,10 @@ export class JwtAuthGuard implements CanActivate {
     const token = req.cookies?.[AUTH_COOKIE] ?? (header?.startsWith("Bearer ") ? header.slice(7) : undefined);
     if (!token) throw new UnauthorizedException();
     try {
-      req.user = await this.jwt.verifyAsync<JwtPayload>(token);
+      const payload = await this.jwt.verifyAsync<JwtPayload>(token);
+      // Jeton émis avant le multi-client (sans tenantId) : reconnexion obligatoire.
+      if (!payload.tenantId) throw new Error("tenantId absent");
+      req.user = payload;
       return true;
     } catch {
       throw new UnauthorizedException();

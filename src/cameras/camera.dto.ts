@@ -1,4 +1,4 @@
-import { IsString, Length, Matches } from "class-validator";
+import { IsOptional, IsString, IsUUID, Length, Matches } from "class-validator";
 
 export class CreateCameraDto {
   @IsString()
@@ -10,6 +10,11 @@ export class CreateCameraDto {
   @Length(1, 128)
   @Matches(/^[A-Za-z0-9._~\-/]+$/, { message: "streamPath : caractères autorisés A-Z a-z 0-9 . _ ~ - /" })
   streamPath: string;
+
+  /** DVR cible. Facultatif si le client n'a qu'un seul DVR. */
+  @IsOptional()
+  @IsUUID()
+  dvrId?: string;
 }
 
 export class UpdateCameraDto {

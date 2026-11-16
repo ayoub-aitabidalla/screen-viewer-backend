@@ -1,4 +1,4 @@
-/** Réglages DVR / go2rtc / MediaMTX lus depuis l'environnement (.env). */
+/** Réglages d'accès à un DVR et à la passerelle vidéo (go2rtc / MediaMTX) de son site. */
 export interface NvrSettings {
   dvrHost: string;
   dvrUser: string;
@@ -11,8 +11,13 @@ export interface NvrSettings {
   go2rtcOnvifPassword: string;
   /** Base RTSP de MediaMTX vue par go2rtc, ex. rtsp://127.0.0.1:8554 */
   mediamtxRtspUrl: string;
+  mediamtxApiUrl: string;
 }
 
+/**
+ * Lecture depuis .env (DVR_*, GO2RTC_*, MEDIAMTX_*). Ne sert plus qu'au script dvr:probe et à la migration
+ * vers le multi-client : en fonctionnement normal, les réglages viennent de la table "dvrs".
+ */
 export function nvrSettings(env: NodeJS.ProcessEnv = process.env): NvrSettings {
   const need = (k: string) => {
     const v = env[k];
@@ -29,5 +34,6 @@ export function nvrSettings(env: NodeJS.ProcessEnv = process.env): NvrSettings {
     go2rtcOnvifUser: env.GO2RTC_ONVIF_USER ?? "admin",
     go2rtcOnvifPassword: need("GO2RTC_ONVIF_PASSWORD"),
     mediamtxRtspUrl: env.MEDIAMTX_RTSP_URL ?? "rtsp://127.0.0.1:8554",
+    mediamtxApiUrl: env.MEDIAMTX_API_URL ?? "http://127.0.0.1:9997",
   };
 }

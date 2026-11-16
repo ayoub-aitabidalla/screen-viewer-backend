@@ -1,6 +1,9 @@
 import "reflect-metadata";
 import { DataSourceOptions } from "typeorm";
 import { Camera } from "../cameras/camera.entity";
+import { Dvr } from "../dvrs/dvr.entity";
+import { Gateway } from "../gateways/gateway.entity";
+import { Tenant } from "../tenants/tenant.entity";
 import { User } from "../users/user.entity";
 
 /** Configuration TypeORM partagée par l'application et le seeder (lue depuis .env). */
@@ -12,7 +15,7 @@ export function dbOptions(env: NodeJS.ProcessEnv = process.env): DataSourceOptio
     database: env.DB_NAME ?? "screenviewer",
     username: env.DB_USER ?? "screenviewer",
     password: env.DB_PASSWORD ?? "screenviewer",
-    entities: [User, Camera],
+    entities: [Tenant, User, Gateway, Dvr, Camera],
     // Schéma synchronisé automatiquement : suffisant pour démarrer, à remplacer par des migrations.
     synchronize: true,
   };
