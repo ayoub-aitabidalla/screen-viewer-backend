@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { XMLBuilder, XMLParser } from "fast-xml-parser";
 import { DigestFetch } from "./digest";
 
@@ -26,6 +27,13 @@ export interface DvrChannel {
   port: number;
   srcInputPort: number;
   userName: string;
+}
+
+/** Segment enregistré, horaires en heure locale du DVR (format ISAPI). */
+export interface DvrRecording {
+  start: string;
+  end: string;
+  playbackUri: string;
 }
 
 export interface DvrChannelStatus {
@@ -191,5 +199,83 @@ export class DvrClient {
   /** Retire le canal IP. N'efface pas les enregistrements déjà présents sur le disque. */
   async deleteChannel(id: number): Promise<void> {
     await this.request("DELETE", `/ISAPI/ContentMgmt/InputProxy/channels/${id}`);
+  }
+
+  /**
+   * Décalage de l'horloge du DVR par rapport à UTC, en minutes (ex. +60 pour GMT+01:00), lu dans localTime.
+   * Les horaires de recherche et de relecture ISAPI sont en heure locale du DVR, même s'ils portent un « Z ».
+   */
+  async utcOffsetMinutes(): Promise<number> {
+    const t = str((await this.request("GET", "/ISAPI/System/time")).Time?.localTime);
+    const m = /([+-])(\d{2}):?(\d{2})$/.exec(t);
+    return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
+  }
+
+  /**
+   * Enregistrements d'une piste (canal × 100 + 1) entre deux horaires « locaux DVR » au format ISAPI (YYYY-MM-DDTHH:mm:ssZ).
+   * Parcourt toutes les pages de résultats (le DVR répond « MORE » tant qu'il en reste).
+   */
+  async searchRecordings(trackId: number, startLocal: string, endLocal: string, max = 2000): Promise<DvrRecording[]> {
+    const out: DvrRecording[] = [];
+    const searchID = randomUUID();
+    for (let pos = 0; pos < max; ) {
+      const xml = builder.build({
+        CMSearchDescription: {
+          "@_version": "1.0",
+          "@_xmlns": NS,
+          searchID,
+          trackList: { trackID: trackId },
+          timeSpanList: { timeSpan: { startTime: startLocal, endTime: endLocal } },
+          maxResults: 50,
+          searchResultPostion: pos, // orthographe de l'ISAPI Hikvision
+          metadataList: { metadataDescriptor: "//recordType.meta.std-cgi.com" },
+        },
+      });
+      const r = (await this.request("POST", "/ISAPI/ContentMgmt/search", xml)).CMSearchResult ?? {};
+      const items = asArray<any>(r.matchList?.searchMatchItem);
+      for (const it of items)
+        out.push({
+          start: str(it.timeSpan?.startTime),
+          end: str(it.timeSpan?.endTime),
+          playbackUri: str(it.mediaSegmentDescriptor?.playbackURI),
+        });
+      if (str(r.responseStatusStrg) !== "MORE" || items.length === 0) break;
+      pos += items.length;
+    }
+    return out;
+  }
+
+  /**
+   * Télécharge un segment entier (playbackURI renvoyé par searchRecordings) à la vitesse du disque.
+   * Le DVR refuse les plages arbitraires : seule l'URI exacte d'un segment fonctionne. Format renvoyé : Hikvision « IMKH ».
+   */
+  async downloadSegment(playbackUri: string): Promise<ReadableStream<Uint8Array>> {
+    const esc = playbackUri.replace(/&(?!amp;)/g, "&amp;");
+    const body = `<?xml version="1.0" encoding="UTF-8"?><downloadRequest version="1.0" xmlns="${NS}"><playbackURI>${esc}</playbackURI></downloadRequest>`;
+    let res: Response;
+    try {
+      res = await this.http.fetch(this.base + "/ISAPI/ContentMgmt/download", {
+        method: "POST",
+        body,
+        headers: { "Content-Type": "application/xml; charset=UTF-8" },
+        signal: AbortSignal.timeout(10 * 60_000),
+      });
+    } catch (e) {
+      throw new DvrError(`DVR injoignable (${this.cfg.host}) : ${(e as Error).message}`, 0);
+    }
+    const type = res.headers.get("content-type") ?? "";
+    if (!res.ok || !res.body || type.includes("xml")) {
+      const text = await res.text().catch(() => "");
+      throw new DvrError(`Le DVR a refusé le téléchargement (HTTP ${res.status})`, res.status, undefined, undefined, text);
+    }
+    return res.body as ReadableStream<Uint8Array>;
+  }
+
+  /** URL RTSP de relecture avec identifiants, à usage interne (go2rtc) : ne jamais la renvoyer au navigateur. */
+  playbackRtspUrl(trackId: number, startLocalCompact: string, endLocalCompact?: string, rtspPort = 554): string {
+    const host = this.cfg.host.replace(/:\d+$/, "");
+    const cred = `${encodeURIComponent(this.cfg.user)}:${encodeURIComponent(this.cfg.password)}`;
+    const q = `starttime=${startLocalCompact}${endLocalCompact ? `&endtime=${endLocalCompact}` : ""}`;
+    return `rtsp://${cred}@${host}:${rtspPort}/Streaming/tracks/${trackId}/?${q}`;
   }
 }

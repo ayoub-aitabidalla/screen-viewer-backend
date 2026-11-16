@@ -10,7 +10,8 @@
     "migrate:tenancy": "ts-node src/database/migrate-tenancy.ts",
     "migrate:gateways": "ts-node src/database/migrate-gateways.ts",
     "db:up": "docker compose up -d",
-    "dvr:probe": "ts-node src/scripts/dvr-probe.ts"
+    "dvr:probe": "ts-node src/scripts/dvr-probe.ts",
+    "dvr:history": "ts-node src/scripts/dvr-history-probe.ts"
   },
   "keywords": [],
   "author": "",
