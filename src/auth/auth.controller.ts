@@ -1,7 +1,9 @@
-import { Body, Controller, Get, HttpCode, Post, Req, Res, UnauthorizedException } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Post, Req, Res, UnauthorizedException, UseGuards } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { ConfigService } from "@nestjs/config";
 import type { Request, Response } from "express";
 import { UsersService } from "../users/users.service";
+import { AuthThrottlerGuard } from "./auth-throttler.guard";
 import { AUTH_COOKIE } from "./auth.constants";
 import { AuthService } from "./auth.service";
 import type { JwtPayload } from "./jwt-auth.guard";
@@ -28,6 +30,7 @@ export class AuthController {
   }
 
   @Public()
+  @UseGuards(AuthThrottlerGuard)
   @Post("login")
   @HttpCode(200)
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
@@ -38,6 +41,9 @@ export class AuthController {
 
   /** Création d'un compte client (client + premier administrateur) ; ouvre directement la session. */
   @Public()
+  @UseGuards(AuthThrottlerGuard)
+  // Inscription : 3 créations de compte client par heure et par IP.
+  @Throttle({ ip: { limit: 3, ttl: 60 * 60_000 } })
   @Post("signup")
   @HttpCode(201)
   async signup(@Body() dto: SignupDto, @Res({ passthrough: true }) res: Response) {

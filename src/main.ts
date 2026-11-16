@@ -10,6 +10,9 @@ async function bootstrap() {
   // Offres WebRTC (WHEP) du mur en direct : corps SDP brut, relayé tel quel à MediaMTX.
   app.useBodyParser("text", { type: "application/sdp", limit: "64kb" });
   // Le viewer appelle /api/... via le proxy Vite : même origine, pas besoin de CORS.
+  // Le viewer passe par un proxy local (Vite, ou un reverse proxy en production) : on fait confiance à son
+  // en-tête X-Forwarded-For pour connaître la vraie IP du client (limitation des tentatives de connexion).
+  app.set("trust proxy", "loopback");
   app.setGlobalPrefix("api");
   app.use(cookieParser());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
