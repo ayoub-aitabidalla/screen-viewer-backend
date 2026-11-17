@@ -4,11 +4,12 @@ import { Camera } from "../cameras/camera.entity";
 import { Dvr } from "../dvrs/dvr.entity";
 import { DvrsModule } from "../dvrs/dvrs.module";
 import { DvrHistoryController } from "./dvr-history.controller";
+import { DvrExportsService } from "./dvr-exports.service";
 import { DvrHistoryService } from "./dvr-history.service";
 
 @Module({
   imports: [TypeOrmModule.forFeature([Camera, Dvr]), DvrsModule],
   controllers: [DvrHistoryController],
-  providers: [DvrHistoryService],
+  providers: [DvrHistoryService, DvrExportsService],
 })
 export class DvrHistoryModule {}

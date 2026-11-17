@@ -12,7 +12,8 @@ async function bootstrap() {
   // Le viewer appelle /api/... via le proxy Vite : même origine, pas besoin de CORS.
   // Le viewer passe par un proxy local (Vite, ou un reverse proxy en production) : on fait confiance à son
   // en-tête X-Forwarded-For pour connaître la vraie IP du client (limitation des tentatives de connexion).
-  app.set("trust proxy", "loopback");
+  // TRUST_PROXY : "loopback" en local (Vite), "uniquelocal" en Docker (Caddy sur le réseau interne).
+  app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
   app.setGlobalPrefix("api");
   app.use(cookieParser());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));

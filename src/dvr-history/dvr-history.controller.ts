@@ -1,9 +1,18 @@
-import { BadGatewayException, Controller, Get, Param, ParseUUIDPipe, Query, Req, Res } from "@nestjs/common";
+import { BadGatewayException, Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, Query, Req, Res } from "@nestjs/common";
+import { IsISO8601, IsNumber, Max, Min } from "class-validator";
 import type { Request, Response } from "express";
 import { Readable } from "stream";
 import { TenantId } from "../auth/tenant.decorator";
 import { siteFetch } from "../sites/site-fetch";
+import { DvrExportsService } from "./dvr-exports.service";
 import { DvrHistoryService } from "./dvr-history.service";
+
+export class StartExportDto {
+  /** Début de la plage (ISO, UTC). */
+  @IsISO8601() start: string;
+  /** Durée en secondes, 2 h maximum. */
+  @IsNumber() @Min(1) @Max(2 * 3600) duration: number;
+}
 
 /**
  * Historique & relecture depuis le DVR, pour les postes enregistrés du client connecté.
@@ -11,7 +20,10 @@ import { DvrHistoryService } from "./dvr-history.service";
  */
 @Controller("dvr-history")
 export class DvrHistoryController {
-  constructor(private readonly history: DvrHistoryService) {}
+  constructor(
+    private readonly history: DvrHistoryService,
+    private readonly exports: DvrExportsService,
+  ) {}
 
   @Get("cameras")
   cameras(@TenantId() t: string) {
@@ -25,19 +37,36 @@ export class DvrHistoryController {
   }
 
   /**
-   * Téléchargement MP4 de ?start= (ISO) pendant ?duration= secondes (2 h max). Pour un segment entier : son début et sa durée.
-   * Le fichier est préparé côté serveur (téléchargement DVR + ffmpeg), puis envoyé et supprimé.
+   * Téléchargement MP4, en tâche de fond : lance la préparation de [start, start + duration] (2 h max) et répond tout de suite.
+   * Le viewer suit ensuite GET exports/:id, puis récupère GET exports/:id/file. Pour un segment entier : son début et sa durée.
    */
-  @Get("cameras/:id/download")
-  async download(
-    @TenantId() t: string,
-    @Param("id", ParseUUIDPipe) id: string,
-    @Query("start") start: string,
-    @Query("duration") duration: string,
-    @Res() res: Response,
-  ) {
-    const out = await this.history.export(t, id, start, Number(duration));
-    res.download(out.file, out.name, () => void out.cleanup());
+  @Post("cameras/:id/exports")
+  @HttpCode(202)
+  startExport(@TenantId() t: string, @Param("id", ParseUUIDPipe) id: string, @Body() dto: StartExportDto) {
+    return this.exports.start(t, id, dto.start, dto.duration);
+  }
+
+  /** État d'un export : en attente, en cours (pourcentage), prêt, échoué. */
+  @Get("exports/:exportId")
+  exportStatus(@TenantId() t: string, @Param("exportId", ParseUUIDPipe) exportId: string) {
+    return this.exports.get(t, exportId);
+  }
+
+  /** Fichier MP4 prêt : envoyé immédiatement (pas d'attente), puis supprimé du serveur. */
+  @Get("exports/:exportId/file")
+  exportFile(@TenantId() t: string, @Param("exportId", ParseUUIDPipe) exportId: string, @Res() res: Response) {
+    const f = this.exports.file(t, exportId);
+    res.download(f.path, f.name, (err) => {
+      // Envoi interrompu : on garde le fichier pour une nouvelle tentative (il expirera de lui-même).
+      if (!err) f.done();
+    });
+  }
+
+  /** Annule une préparation en cours, ou supprime un fichier prêt non récupéré. */
+  @Delete("exports/:exportId")
+  @HttpCode(204)
+  cancelExport(@TenantId() t: string, @Param("exportId", ParseUUIDPipe) exportId: string) {
+    return this.exports.cancel(t, exportId);
   }
 
   /** Relecture à partir de ?start= (ISO). Le flux continue tant que le navigateur lit ; fermé dès qu'il s'arrête. */

@@ -16,7 +16,6 @@ import { DvrsService } from "../dvrs/dvrs.service";
 import { DvrError } from "../nvr/dvr.client";
 import { dvrClientFor } from "../nvr/nvr.settings";
 import { NO_ACCESS, siteFetch, type SiteAccess } from "../sites/site-fetch";
-import { exportRange } from "./dvr-export";
 
 /** Un segment enregistré par le DVR, horaires en UTC réel (le front affiche en heure locale du navigateur). */
 export interface DvrSegment {
@@ -171,7 +170,11 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
    * Fichier MP4 de la plage [from, from + duration] : segments du DVR qui la couvrent, assemblés et découpés par ffmpeg.
    * À supprimer avec cleanup() une fois envoyé.
    */
-  async export(tenantId: string, cameraId: string, fromIso?: string, durationSec?: number) {
+  /**
+   * Prépare un export : vérifie la plage et cherche les segments sur le DVR (rapide), sans rien télécharger.
+   * Renvoie de quoi lancer exportRange en tâche de fond (voir DvrExportsService).
+   */
+  async planExport(tenantId: string, cameraId: string, fromIso?: string, durationSec?: number) {
     const from = new Date(fromIso ?? "");
     const dur = Number(durationSec);
     if (Number.isNaN(from.getTime()) || !(dur > 0)) throw new BadRequestException({ message: "Début ou durée invalide", code: null });
@@ -184,14 +187,13 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
         .map((r) => ({ playbackUri: r.playbackUri, startMs: fromDvr(r.start, offset).getTime(), endMs: fromDvr(r.end, offset).getTime() }))
         .filter((r) => r.endMs > from.getTime() && r.startMs < to.getTime())
         .sort((a, b) => a.startMs - b.startMs);
-      if (!recs.length) throw new NotFoundException({ message: "Aucun enregistrement sur cette plage", code: null });
-      // La plage commence au plus tôt au début du premier segment trouvé.
+      if (!recs.length) throw new NotFoundException({ message: "Aucun enregistrement sur cette plage", code: "noRecording" });
+      // La plage commence au plus tôt au début du premier segment trouvé, et finit au plus tard à la fin du dernier.
       const start = Math.max(from.getTime(), recs[0].startMs);
       const length = Math.min(to.getTime(), recs[recs.length - 1].endMs) - start;
-      const out = await exportRange(dvr, recs, start, length / 1000);
       const stamp = new Date(start).toISOString().slice(0, 19).replace(/[:T]/g, "-");
       const name = `${cam.streamPath.replace(/[^A-Za-z0-9._-]+/g, "_")}_${stamp}_${Math.round(length / 1000)}s.mp4`;
-      return { ...out, name };
+      return { dvr, recs, start, durationSec: length / 1000, name };
     } catch (e) {
       throw upstream(e);
     }
