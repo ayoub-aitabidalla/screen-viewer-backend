@@ -2,6 +2,7 @@ import { BadGatewayException, Controller, Get, Param, ParseUUIDPipe, Query, Req,
 import type { Request, Response } from "express";
 import { Readable } from "stream";
 import { TenantId } from "../auth/tenant.decorator";
+import { siteFetch } from "../sites/site-fetch";
 import { DvrHistoryService } from "./dvr-history.service";
 
 /**
@@ -49,13 +50,13 @@ export class DvrHistoryController {
       if (released) return;
       released = true;
       ctrl.abort();
-      void this.history.release(p.go2rtcUrl, p.src);
+      void this.history.release(p.access, p.go2rtcUrl, p.src);
     };
     req.on("close", release);
 
     let up: Response | globalThis.Response;
     try {
-      up = await fetch(p.mp4Url, { signal: ctrl.signal });
+      up = await siteFetch(p.access, p.mp4Url, { signal: ctrl.signal });
     } catch (e) {
       release();
       throw new BadGatewayException({ message: `go2rtc injoignable : ${(e as Error).message}`, code: "go2rtcUnreachable" });

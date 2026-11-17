@@ -51,10 +51,11 @@ export class LiveController {
   /** Relecture : MP4 fragmenté relayé en flux (pas de requêtes Range, comme le serveur playback de MediaMTX). */
   @Get("playback")
   async playback(@TenantId() t: string, @Query() q: GwQuery & Record<string, string>, @Req() req: Request, @Res() res: Response) {
-    const url = this.live.playbackUrl(await this.live.gateway(t, gwId(q)), q);
+    const gw = await this.live.gateway(t, gwId(q));
+    const url = this.live.playbackUrl(gw, q);
     const ctrl = new AbortController();
     req.on("close", () => ctrl.abort());
-    const up = await this.live.upstream(url, { signal: ctrl.signal });
+    const up = await this.live.upstream(gw, url, { signal: ctrl.signal });
     res.status(up.status);
     const type = up.headers.get("content-type");
     if (type) res.setHeader("Content-Type", type);
@@ -71,7 +72,7 @@ export class LiveController {
   async whep(@TenantId() t: string, @Query() q: GwQuery & { path?: string }, @Body() sdp: string, @Res() res: Response) {
     if (typeof sdp !== "string" || !sdp.startsWith("v=")) throw new HttpException({ message: "Offre SDP attendue (application/sdp)", code: null }, 400);
     const g = await this.live.gateway(t, gwId(q));
-    const up = await this.live.upstream(this.live.whepUrl(g, q.path ?? ""), {
+    const up = await this.live.upstream(g, this.live.whepUrl(g, q.path ?? ""), {
       method: "POST",
       headers: { "Content-Type": "application/sdp" },
       body: sdp,
@@ -88,7 +89,7 @@ export class LiveController {
   @Delete("whep")
   async whepClose(@TenantId() t: string, @Query() q: GwQuery & { session?: string }, @Res() res: Response) {
     const g = await this.live.gateway(t, gwId(q));
-    const up = await this.live.upstream(this.live.sessionUrl(g, q.session), { method: "DELETE" }).catch(() => null);
+    const up = await this.live.upstream(g, this.live.sessionUrl(g, q.session), { method: "DELETE" }).catch(() => null);
     res.status(up?.ok ? 200 : 204).end();
   }
 }

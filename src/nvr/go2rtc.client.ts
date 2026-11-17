@@ -1,11 +1,15 @@
+import { cloudflareError, type FetchFn } from "../sites/site-fetch";
+
 /**
  * Client de l'API HTTP go2rtc. go2rtc sert de « caméra ONVIF » pour le DVR : chaque flux déclaré
  * devient un profil ONVIF, que le DVR sélectionne par sa position (srcInputPort = position + 1).
  */
 export class Go2rtcClient {
   constructor(
-    private readonly baseUrl: string, // ex. "http://127.0.0.1:1984"
+    private readonly baseUrl: string, // ex. "http://127.0.0.1:1984" ou "https://s-a7k2-go2rtc.tondomaine.com"
     private readonly timeoutMs = 5000,
+    /** fetch utilisé (siteFetch du site pour passer par son tunnel Cloudflare). */
+    private readonly doFetch: FetchFn = (u, i) => fetch(u, i),
   ) {}
 
   private url(path: string) {
@@ -15,10 +19,12 @@ export class Go2rtcClient {
   private async call(method: string, path: string, init: RequestInit = {}): Promise<Response> {
     let res: Response;
     try {
-      res = await fetch(this.url(path), { ...init, method, signal: AbortSignal.timeout(this.timeoutMs) });
+      res = await this.doFetch(this.url(path), { ...init, method, signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (e) {
       throw new Error(`go2rtc injoignable (${this.baseUrl}) : ${(e as Error).message}`);
     }
+    const cf = cloudflareError(res);
+    if (cf) throw new Error(`go2rtc (${this.baseUrl}) : ${cf}`);
     if (!res.ok) throw new Error(`go2rtc a refusé ${method} ${path} : HTTP ${res.status} ${await res.text()}`);
     return res;
   }

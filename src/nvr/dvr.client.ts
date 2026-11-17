@@ -1,11 +1,23 @@
 import { randomUUID } from "crypto";
 import { XMLBuilder, XMLParser } from "fast-xml-parser";
+import { cloudflareError, type FetchFn } from "../sites/site-fetch";
 import { DigestFetch } from "./digest";
 
 const NS = "http://www.hikvision.com/ver20/XMLSchema";
 
 export interface DvrConfig {
-  host: string; // ex. "192.168.8.64" ou "192.168.8.64:80"
+  /**
+   * Adresse ISAPI : "192.168.8.64", "192.168.8.64:80", ou une URL complète
+   * ("https://s-a7k2-dvr1.tondomaine.com" pour un DVR joint par le tunnel Cloudflare du site).
+   */
+  host: string;
+  /**
+   * Adresse du DVR sur le réseau local du site, utilisée par go2rtc (sur ce même réseau) pour la relecture RTSP.
+   * Facultative si host est déjà une adresse locale.
+   */
+  lanHost?: string | null;
+  /** fetch utilisé pour l'ISAPI (siteFetch du site, qui ajoute le jeton Cloudflare Access). */
+  fetch?: FetchFn;
   user: string;
   password: string;
   timeoutMs?: number;
@@ -92,8 +104,8 @@ export class DvrClient {
   private readonly base: string;
 
   constructor(private readonly cfg: DvrConfig) {
-    this.http = new DigestFetch(cfg.user, cfg.password);
-    this.base = `http://${cfg.host}`;
+    this.http = new DigestFetch(cfg.user, cfg.password, cfg.fetch);
+    this.base = /^https?:\/\//i.test(cfg.host) ? cfg.host.replace(/\/$/, "") : `http://${cfg.host}`;
   }
 
   private async request(method: string, path: string, body?: string): Promise<any> {
@@ -113,6 +125,8 @@ export class DvrClient {
     const rs = doc.ResponseStatus;
     const failedStatus = rs && str(rs.statusCode) !== "1" && str(rs.statusCode) !== "";
     if (!res.ok || failedStatus) {
+      const cf = cloudflareError(res);
+      if (cf) throw new DvrError(cf, res.status, undefined, undefined, text);
       if (res.status === 401) throw new DvrError("Identifiants du DVR refusés", 401, undefined, undefined, text);
       const sub = str(rs?.subStatusCode);
       const statusString = str(rs?.statusString);
@@ -273,7 +287,10 @@ export class DvrClient {
 
   /** URL RTSP de relecture avec identifiants, à usage interne (go2rtc) : ne jamais la renvoyer au navigateur. */
   playbackRtspUrl(trackId: number, startLocalCompact: string, endLocalCompact?: string, rtspPort = 554): string {
-    const host = this.cfg.host.replace(/:\d+$/, "");
+    if (/^https?:\/\//i.test(this.cfg.host) && !this.cfg.lanHost)
+      throw new DvrError("Adresse LAN du DVR manquante : nécessaire pour la relecture quand le DVR est joint par un tunnel", 0);
+    // go2rtc est sur le réseau du site : il joint le DVR par son adresse locale, jamais par le tunnel.
+    const host = (this.cfg.lanHost || this.cfg.host).replace(/^https?:\/\//i, "").replace(/[:/].*$/, "");
     const cred = `${encodeURIComponent(this.cfg.user)}:${encodeURIComponent(this.cfg.password)}`;
     const q = `starttime=${startLocalCompact}${endLocalCompact ? `&endtime=${endLocalCompact}` : ""}`;
     return `rtsp://${cred}@${host}:${rtspPort}/Streaming/tracks/${trackId}/?${q}`;

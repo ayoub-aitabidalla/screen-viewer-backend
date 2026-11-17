@@ -1,10 +1,21 @@
-import { BadGatewayException, BadRequestException, HttpException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadGatewayException,
+  BadRequestException,
+  HttpException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnApplicationBootstrap,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { Camera } from "../cameras/camera.entity";
 import { Dvr } from "../dvrs/dvr.entity";
 import { DvrsService } from "../dvrs/dvrs.service";
-import { DvrClient, DvrError } from "../nvr/dvr.client";
+import { DvrError } from "../nvr/dvr.client";
+import { dvrClientFor } from "../nvr/nvr.settings";
+import { NO_ACCESS, siteFetch, type SiteAccess } from "../sites/site-fetch";
 import { exportRange } from "./dvr-export";
 
 /** Un segment enregistré par le DVR, horaires en UTC réel (le front affiche en heure locale du navigateur). */
@@ -39,12 +50,51 @@ function upstream(e: unknown): HttpException {
  * puis relecture RTSP du DVR convertie en MP4 par le go2rtc de la passerelle. Tout est filtré par client.
  */
 @Injectable()
-export class DvrHistoryService {
+export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly log = new Logger(DvrHistoryService.name);
+  private sweeper?: ReturnType<typeof setInterval>;
+
   constructor(
     @InjectRepository(Camera) private readonly cameras: Repository<Camera>,
     @InjectRepository(Dvr) private readonly dvrRepo: Repository<Dvr>,
     private readonly dvrs: DvrsService,
   ) {}
+
+  onApplicationBootstrap() {
+    void this.sweep();
+    this.sweeper = setInterval(() => void this.sweep(), 5 * 60_000);
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.sweeper);
+  }
+
+  /**
+   * Retire de chaque go2rtc les sources de relecture DVR restées sans lecteur. Elles contiennent les identifiants
+   * du DVR ; normalement libérées à la fin de chaque lecture, elles peuvent rester si le backend a été arrêté en cours.
+   */
+  private async sweep() {
+    const seen = new Set<string>();
+    for (const d of await this.dvrs.allIds().catch(() => [])) {
+      try {
+        const s = await this.dvrs.settings(d.tenantId, d.id);
+        const key = s.go2rtcUrl;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const base = s.go2rtcUrl.replace(/\/$/, "");
+        const res = await siteFetch(s.access, `${base}/api/streams`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) continue;
+        const streams = (await res.json()) as Record<string, { consumers?: unknown[] } | null>;
+        const stale = Object.entries(streams ?? {}).filter(
+          ([name, v]) => name.startsWith("rtsp://") && name.includes("/Streaming/tracks/") && !(v?.consumers?.length),
+        );
+        for (const [name] of stale) await this.release(s.access ?? NO_ACCESS, base, name);
+        if (stale.length) this.log.log(`${stale.length} source(s) de relecture orpheline(s) retirée(s) de go2rtc (${d.name})`);
+      } catch {
+        /* passerelle injoignable : on réessaiera au prochain passage */
+      }
+    }
+  }
 
   /** Postes enregistrés du client, avec le nom de leur DVR (pour faire le lien avec les postes du mur). */
   async list(tenantId: string) {
@@ -68,8 +118,8 @@ export class DvrHistoryService {
     const cam = await this.cameras.findOneBy({ id: cameraId, tenantId });
     if (!cam) throw new NotFoundException({ message: "Poste enregistré introuvable", code: null });
     const s = await this.dvrs.settings(tenantId, cam.dvrId);
-    const dvr = new DvrClient({ host: s.dvrHost, user: s.dvrUser, password: s.dvrPassword, timeoutMs: 15000 });
-    return { cam, dvr, go2rtcUrl: s.go2rtcUrl.replace(/\/$/, ""), track: trackOf(cam.dvrChannelId) };
+    const dvr = dvrClientFor(s, 15000);
+    return { cam, dvr, go2rtcUrl: s.go2rtcUrl.replace(/\/$/, ""), access: s.access ?? NO_ACCESS, track: trackOf(cam.dvrChannelId) };
   }
 
   async segments(tenantId: string, cameraId: string, fromIso?: string, toIso?: string): Promise<{ segments: DvrSegment[]; dvrOffsetMinutes: number }> {
@@ -99,10 +149,14 @@ export class DvrHistoryService {
    * Prépare une relecture à partir de `startIso` : renvoie l'URL MP4 de go2rtc (à relayer au navigateur)
    * et la source à supprimer de go2rtc à la fin (elle contient les identifiants du DVR).
    */
-  async playback(tenantId: string, cameraId: string, startIso?: string): Promise<{ mp4Url: string; go2rtcUrl: string; src: string }> {
+  async playback(
+    tenantId: string,
+    cameraId: string,
+    startIso?: string,
+  ): Promise<{ mp4Url: string; go2rtcUrl: string; src: string; access: SiteAccess }> {
     const start = new Date(startIso ?? "");
     if (Number.isNaN(start.getTime())) throw new BadRequestException({ message: "Horaire de départ invalide", code: null });
-    const { dvr, go2rtcUrl, track } = await this.context(tenantId, cameraId);
+    const { dvr, go2rtcUrl, access, track } = await this.context(tenantId, cameraId);
     let offset: number;
     try {
       offset = await dvr.utcOffsetMinutes();
@@ -110,7 +164,7 @@ export class DvrHistoryService {
       throw upstream(e);
     }
     const src = dvr.playbackRtspUrl(track, compact(toDvr(start, offset)));
-    return { mp4Url: `${go2rtcUrl}/api/stream.mp4?src=${encodeURIComponent(src)}`, go2rtcUrl, src };
+    return { mp4Url: `${go2rtcUrl}/api/stream.mp4?src=${encodeURIComponent(src)}`, go2rtcUrl, src, access };
   }
 
   /**
@@ -144,7 +198,10 @@ export class DvrHistoryService {
   }
 
   /** Retire de go2rtc la source temporaire de relecture (go2rtc la garde en mémoire, identifiants compris). */
-  async release(go2rtcUrl: string, src: string): Promise<void> {
-    await fetch(`${go2rtcUrl}/api/streams?src=${encodeURIComponent(src)}`, { method: "DELETE", signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+  async release(access: SiteAccess, go2rtcUrl: string, src: string): Promise<void> {
+    await siteFetch(access, `${go2rtcUrl}/api/streams?src=${encodeURIComponent(src)}`, {
+      method: "DELETE",
+      signal: AbortSignal.timeout(8000),
+    }).catch(() => undefined);
   }
 }

@@ -30,9 +30,19 @@ export class Dvr {
   @Column({ length: 64 })
   name: string;
 
-  /** Adresse ISAPI du DVR, ex. "192.168.8.64" ou "192.168.8.64:80". */
+  /**
+   * Adresse ISAPI du DVR telle que le backend la joint : "192.168.8.64", "192.168.8.64:80",
+   * ou "https://s-a7k2-dvr1.tondomaine.com" quand le DVR est publié par le tunnel Cloudflare du site.
+   */
   @Column({ length: 128 })
   host: string;
+
+  /**
+   * Adresse du DVR sur le réseau local du site (ex. "192.168.8.64"), utilisée par go2rtc pour la relecture RTSP.
+   * Obligatoire quand host est une URL de tunnel ; facultative sinon (host sert alors aussi d'adresse LAN).
+   */
+  @Column({ name: "lan_host", type: "varchar", length: 128, nullable: true })
+  lanHost: string | null;
 
   @Column({ length: 64 })
   username: string;

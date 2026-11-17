@@ -12,7 +12,8 @@ import { Repository } from "typeorm";
 import { DvrsService } from "../dvrs/dvrs.service";
 import { DvrChannel, DvrClient, DvrError } from "../nvr/dvr.client";
 import { Go2rtcClient } from "../nvr/go2rtc.client";
-import { NvrSettings } from "../nvr/nvr.settings";
+import { dvrClientFor, go2rtcClientFor, NvrSettings } from "../nvr/nvr.settings";
+import { siteFetch } from "../sites/site-fetch";
 import { Camera } from "./camera.entity";
 import { CreateCameraDto, UpdateCameraDto } from "./camera.dto";
 
@@ -100,8 +101,8 @@ export class CamerasService implements OnApplicationBootstrap {
       tenantId,
       dvrId,
       s,
-      dvr: new DvrClient({ host: s.dvrHost, user: s.dvrUser, password: s.dvrPassword }),
-      go2rtc: new Go2rtcClient(s.go2rtcUrl),
+      dvr: dvrClientFor(s),
+      go2rtc: go2rtcClientFor(s),
     };
   }
 
@@ -337,9 +338,10 @@ export class CamerasService implements OnApplicationBootstrap {
     if (!dvrId && (await this.dvrs.list(tenantId)).length === 0) return [];
     const d = await this.dvrs.resolve(tenantId, dvrId);
     const configured = new Set((await this.repo.findBy({ tenantId, dvrId: d.id })).map((x) => x.streamPath));
-    const mtx = (await this.dvrs.settings(tenantId, d.id)).mediamtxApiUrl.replace(/\/$/, "");
+    const s = await this.dvrs.settings(tenantId, d.id);
+    const mtx = s.mediamtxApiUrl.replace(/\/$/, "");
     try {
-      const res = await fetch(`${mtx}/v3/paths/list?itemsPerPage=1000`, { signal: AbortSignal.timeout(5000) });
+      const res = await siteFetch(s.access, `${mtx}/v3/paths/list?itemsPerPage=1000`, { signal: AbortSignal.timeout(8000) });
       const body = (await res.json()) as { items?: { name: string }[] };
       return (body.items ?? []).map((p) => p.name).filter((n) => !configured.has(n)).sort();
     } catch {

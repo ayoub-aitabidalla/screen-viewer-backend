@@ -63,6 +63,17 @@ export class Gateway {
   @Column({ name: "onvif_password_enc", type: "text", select: false })
   onvifPasswordEnc: string;
 
+  /**
+   * Jeton de service Cloudflare Access du site (identifiant), quand ses services sont publiés par le tunnel
+   * cloudflared du serveur local (URL https://s-<site>-…). Null = site joint directement (local / VPN).
+   */
+  @Column({ name: "access_client_id", type: "varchar", length: 128, nullable: true })
+  accessClientId: string | null;
+
+  /** Secret du jeton Access, chiffré. Jamais renvoyé par l'API. */
+  @Column({ name: "access_client_secret_enc", type: "text", nullable: true, select: false })
+  accessClientSecretEnc: string | null;
+
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
 

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import type { FetchFn } from "../sites/site-fetch";
 
 const md5 = (s: string) => createHash("md5").update(s).digest("hex");
 
@@ -29,6 +30,8 @@ export class DigestFetch {
   constructor(
     private readonly user: string,
     private readonly password: string,
+    /** fetch utilisé (siteFetch pour passer par le tunnel Cloudflare d'un site distant). */
+    private readonly doFetch: FetchFn = (u, i) => fetch(u, i),
   ) {}
 
   async fetch(url: string, init: RequestInit = {}): Promise<Response> {
@@ -38,7 +41,7 @@ export class DigestFetch {
       if (res.status !== 401) return res;
       this.updateChallenge(res);
     } else {
-      const res = await fetch(url, init);
+      const res = await this.doFetch(url, init);
       if (res.status !== 401) return res;
       this.updateChallenge(res);
     }
@@ -68,6 +71,6 @@ export class DigestFetch {
     if (c.algorithm) auth += `, algorithm=${c.algorithm}`;
     const headers = new Headers(init.headers);
     headers.set("Authorization", auth);
-    return fetch(url, { ...init, headers });
+    return this.doFetch(url, { ...init, headers });
   }
 }

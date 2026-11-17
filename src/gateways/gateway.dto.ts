@@ -18,6 +18,12 @@ export class CreateGatewayDto {
   @IsInt() @Min(1) @Max(65535) onvifPort: number;
   @IsString() @Length(1, 64) onvifUser: string;
   @IsString() @Length(8, 16, { message: "onvifPassword : 8 à 16 caractères (exigence du DVR)" }) onvifPassword: string;
+  /**
+   * Jeton de service Cloudflare Access, quand les URL ci-dessus sont celles du tunnel du site (https://s-…).
+   * Les deux ou aucun ; absents = site joint directement (local ou VPN).
+   */
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 128) accessClientId?: string;
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 256) accessClientSecret?: string;
 }
 
 /** Champs absents = inchangés ; le mot de passe ONVIF n'est modifié que s'il est fourni. */
@@ -33,4 +39,8 @@ export class UpdateGatewayDto {
   @IsOptional() @IsInt() @Min(1) @Max(65535) onvifPort?: number;
   @IsOptional() @IsString() @Length(1, 64) onvifUser?: string;
   @IsOptional() @IsString() @Length(8, 16) onvifPassword?: string;
+  /** Vide = repasser en accès direct (le secret est alors effacé aussi). */
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 128) accessClientId?: string;
+  /** Fourni seulement pour le changer. */
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 256) accessClientSecret?: string;
 }

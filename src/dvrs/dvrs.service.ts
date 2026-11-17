@@ -4,8 +4,7 @@ import { Repository } from "typeorm";
 import { Camera } from "../cameras/camera.entity";
 import { decryptSecret, encryptSecret } from "../common/secret-box";
 import { GatewaysService } from "../gateways/gateways.service";
-import { DvrClient } from "../nvr/dvr.client";
-import { NvrSettings } from "../nvr/nvr.settings";
+import { dvrClientFor, NvrSettings } from "../nvr/nvr.settings";
 import { CreateDvrDto, UpdateDvrDto } from "./dvr.dto";
 import { Dvr } from "./dvr.entity";
 
@@ -16,6 +15,15 @@ const view = (d: Dvr): DvrView => {
   const { passwordEnc, tenant, gateway, ...rest } = d;
   return rest;
 };
+
+/** Un DVR joint par une URL de tunnel doit aussi avoir son adresse LAN (relecture RTSP par go2rtc sur le site). */
+function assertLanHost(host: string, lanHost: string | null | undefined) {
+  if (/^https?:\/\//i.test(host) && !lanHost)
+    throw new BadRequestException({
+      message: "Adresse LAN du DVR obligatoire quand son adresse ISAPI est une URL de tunnel (ex. 192.168.1.64)",
+      code: "lanHostRequired",
+    });
+}
 
 @Injectable()
 export class DvrsService {
@@ -63,6 +71,8 @@ export class DvrsService {
     const g = await this.gateways.secrets(tenantId, d.gatewayId);
     return {
       dvrHost: d.host,
+      dvrLanHost: d.lanHost,
+      access: g.access,
       dvrUser: d.username,
       dvrPassword: decryptSecret(d.passwordEnc),
       go2rtcUrl: g.go2rtcUrl,
@@ -76,17 +86,19 @@ export class DvrsService {
   }
 
   async create(tenantId: string, dto: CreateDvrDto): Promise<DvrView> {
-    const { password, ...rest } = dto;
+    const { password, lanHost, ...rest } = dto;
     await this.assertNameFree(tenantId, dto.name);
     await this.gateways.get(tenantId, dto.gatewayId); // la passerelle doit appartenir au même client
-    const d = this.repo.create({ ...rest, tenantId, passwordEnc: encryptSecret(password) });
+    assertLanHost(dto.host, lanHost);
+    const d = this.repo.create({ ...rest, lanHost: lanHost || null, tenantId, passwordEnc: encryptSecret(password) });
     return view(await this.repo.save(d));
   }
 
   async update(tenantId: string, id: string, dto: UpdateDvrDto): Promise<DvrView> {
     const d = await this.get(tenantId, id);
-    const { password, ...rest } = dto;
+    const { password, lanHost, ...rest } = dto;
     if (rest.name && rest.name !== d.name) await this.assertNameFree(tenantId, rest.name);
+    assertLanHost(rest.host ?? d.host, lanHost !== undefined ? lanHost : d.lanHost);
     if (rest.gatewayId && rest.gatewayId !== d.gatewayId) {
       await this.gateways.get(tenantId, rest.gatewayId);
       // Les canaux existants pointent vers l'ancien go2rtc : il faut d'abord retirer les postes.
@@ -94,6 +106,7 @@ export class DvrsService {
         throw new ConflictException({ message: "Retirez d'abord les postes enregistrés par ce DVR avant de changer de passerelle", code: "dvrHasCameras" });
     }
     const patch: Partial<Dvr> = { ...rest };
+    if (lanHost !== undefined) patch.lanHost = lanHost || null;
     if (password) patch.passwordEnc = encryptSecret(password);
     await this.repo.update({ id, tenantId }, patch);
     return view(await this.get(tenantId, id));
@@ -111,7 +124,7 @@ export class DvrsService {
   async info(tenantId: string, id: string) {
     const s = await this.settings(tenantId, id);
     try {
-      const info = await new DvrClient({ host: s.dvrHost, user: s.dvrUser, password: s.dvrPassword }).deviceInfo();
+      const info = await dvrClientFor(s).deviceInfo();
       return { reachable: true, ...info, error: null };
     } catch (e) {
       return { reachable: false, error: (e as Error).message };
