@@ -13,6 +13,8 @@ export interface NvrSettings {
   dvrUser: string;
   dvrPassword: string;
   go2rtcUrl: string;
+  /** go2rtc viewer du site (relecture, direct MSE), null si non configuré. */
+  go2rtcViewerUrl?: string | null;
   /** Adresse de go2rtc telle que le DVR la joint (IP LAN, pas 127.0.0.1). */
   go2rtcOnvifHost: string;
   go2rtcOnvifPort: number;

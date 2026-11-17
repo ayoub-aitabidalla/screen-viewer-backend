@@ -147,7 +147,14 @@ export class GatewaysService {
       .listStreams()
       .then((s) => ({ reachable: true, streams: s.length, error: null as string | null }))
       .catch((e: Error) => ({ reachable: false, streams: 0, error: e.message }));
-    return { mediamtx, go2rtc };
+    // go2rtc viewer (relecture, direct MSE) : facultatif, null s'il n'est pas configuré.
+    const viewer = g.viewerGo2rtcUrl
+      ? await new Go2rtcClient(g.viewerGo2rtcUrl, 8000, siteFetcher(g.access))
+          .listStreams()
+          .then((s) => ({ reachable: true, streams: s.length, error: null as string | null }))
+          .catch((e: Error) => ({ reachable: false, streams: 0, error: e.message }))
+      : null;
+    return { mediamtx, go2rtc, viewer };
   }
 
   private async assertNameFree(tenantId: string, name: string) {

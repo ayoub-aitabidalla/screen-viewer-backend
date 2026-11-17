@@ -77,18 +77,23 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
     for (const d of await this.dvrs.allIds().catch(() => [])) {
       try {
         const s = await this.dvrs.settings(d.tenantId, d.id);
-        const key = s.go2rtcUrl;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const base = s.go2rtcUrl.replace(/\/$/, "");
-        const res = await siteFetch(s.access, `${base}/api/streams`, { signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const streams = (await res.json()) as Record<string, { consumers?: unknown[] } | null>;
-        const stale = Object.entries(streams ?? {}).filter(
-          ([name, v]) => name.startsWith("rtsp://") && name.includes("/Streaming/tracks/") && !(v?.consumers?.length),
-        );
-        for (const [name] of stale) await this.release(s.access ?? NO_ACCESS, base, name);
-        if (stale.length) this.log.log(`${stale.length} source(s) de relecture orpheline(s) retirée(s) de go2rtc (${d.name})`);
+        // go2rtc viewer : toute source temporaire sans lecteur (relecture DVR ou direct MSE).
+        // go2rtc des DVR : anciennes sources de relecture créées avant le go2rtc viewer (ne doivent plus exister).
+        const targets: [string | null | undefined, (name: string) => boolean][] = [
+          [s.go2rtcViewerUrl, (n) => n.startsWith("rtsp://")],
+          [s.go2rtcUrl, (n) => n.startsWith("rtsp://") && n.includes("/Streaming/tracks/")],
+        ];
+        for (const [url, temporary] of targets) {
+          if (!url || seen.has(url)) continue;
+          seen.add(url);
+          const base = url.replace(/\/$/, "");
+          const res = await siteFetch(s.access, `${base}/api/streams`, { signal: AbortSignal.timeout(8000) });
+          if (!res.ok) continue;
+          const streams = (await res.json()) as Record<string, { consumers?: unknown[] } | null>;
+          const stale = Object.entries(streams ?? {}).filter(([name, v]) => temporary(name) && !v?.consumers?.length);
+          for (const [name] of stale) await this.release(s.access ?? NO_ACCESS, base, name);
+          if (stale.length) this.log.log(`${stale.length} source(s) temporaire(s) sans lecteur retirée(s) de ${base} (${d.name})`);
+        }
       } catch {
         /* passerelle injoignable : on réessaiera au prochain passage */
       }
@@ -118,7 +123,15 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
     if (!cam) throw new NotFoundException({ message: "Poste enregistré introuvable", code: null });
     const s = await this.dvrs.settings(tenantId, cam.dvrId);
     const dvr = dvrClientFor(s, 15000);
-    return { cam, dvr, go2rtcUrl: s.go2rtcUrl.replace(/\/$/, ""), access: s.access ?? NO_ACCESS, track: trackOf(cam.dvrChannelId) };
+    return {
+      cam,
+      dvr,
+      // Relecture : toujours par le go2rtc viewer, jamais par un go2rtc qu'un DVR utilise en ONVIF
+      // (une source de plus y deviendrait un 2e profil, et le DVR pourrait enregistrer la relecture).
+      go2rtcUrl: s.go2rtcViewerUrl ? s.go2rtcViewerUrl.replace(/\/$/, "") : null,
+      access: s.access ?? NO_ACCESS,
+      track: trackOf(cam.dvrChannelId),
+    };
   }
 
   async segments(tenantId: string, cameraId: string, fromIso?: string, toIso?: string): Promise<{ segments: DvrSegment[]; dvrOffsetMinutes: number }> {
@@ -156,6 +169,11 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
     const start = new Date(startIso ?? "");
     if (Number.isNaN(start.getTime())) throw new BadRequestException({ message: "Horaire de départ invalide", code: null });
     const { dvr, go2rtcUrl, access, track } = await this.context(tenantId, cameraId);
+    if (!go2rtcUrl)
+      throw new BadRequestException({
+        message: "Relecture indisponible : renseignez le go2rtc viewer de la passerelle (onglet Passerelles)",
+        code: "noViewerGo2rtc",
+      });
     let offset: number;
     try {
       offset = await dvr.utcOffsetMinutes();

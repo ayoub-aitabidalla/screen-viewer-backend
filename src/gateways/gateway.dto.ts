@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, IsUrl, Length, Matches, Max, Min, ValidateIf } from "class-validator";
+import { IsIn, IsInt, IsOptional, IsString, IsUrl, Length, Matches, Max, Min, ValidateIf } from "class-validator";
 
 const HTTP = { require_tld: false, require_protocol: true, protocols: ["http", "https"] };
 const RTSP = { require_tld: false, require_protocol: true, protocols: ["rtsp", "rtsps"] };
@@ -14,6 +14,9 @@ export class CreateGatewayDto {
   @IsUrl(RTSP) mediamtxRtspUrl: string;
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 512) recordingsDir?: string | null;
   @IsUrl(HTTP) go2rtcUrl: string;
+  /** go2rtc viewer du site (relecture, direct MSE). Vide = aucun. */
+  @IsOptional() @ValidateIf(filled) @IsUrl(HTTP) viewerGo2rtcUrl?: string | null;
+  @IsOptional() @IsIn(["webrtc", "mse"]) liveMode?: "webrtc" | "mse";
   @IsString() @Matches(HOST, { message: "onvifHost : adresse IP ou nom, sans port" }) onvifHost: string;
   @IsInt() @Min(1) @Max(65535) onvifPort: number;
   @IsString() @Length(1, 64) onvifUser: string;
@@ -35,6 +38,8 @@ export class UpdateGatewayDto {
   @IsOptional() @IsUrl(RTSP) mediamtxRtspUrl?: string;
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 512) recordingsDir?: string | null;
   @IsOptional() @IsUrl(HTTP) go2rtcUrl?: string;
+  @IsOptional() @ValidateIf(filled) @IsUrl(HTTP) viewerGo2rtcUrl?: string | null;
+  @IsOptional() @IsIn(["webrtc", "mse"]) liveMode?: "webrtc" | "mse";
   @IsOptional() @IsString() @Matches(HOST) onvifHost?: string;
   @IsOptional() @IsInt() @Min(1) @Max(65535) onvifPort?: number;
   @IsOptional() @IsString() @Length(1, 64) onvifUser?: string;

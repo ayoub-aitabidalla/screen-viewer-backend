@@ -49,6 +49,18 @@ export class Gateway {
   @Column({ name: "go2rtc_url", length: 256 })
   go2rtcUrl: string;
 
+  /**
+   * go2rtc « viewer » du site (ex. "http://127.0.0.1:1980" ou "https://screen-s1-live.domaine.com") : relecture DVR
+   * et direct en MSE. Distinct des go2rtc utilisés par les DVR en ONVIF, pour qu'aucune source temporaire n'y
+   * apparaisse comme un profil. Null = relecture et direct MSE indisponibles.
+   */
+  @Column({ name: "viewer_go2rtc_url", type: "varchar", length: 256, nullable: true })
+  viewerGo2rtcUrl: string | null;
+
+  /** Mode du mur en direct : "webrtc" (réseau local) ou "mse" (via le tunnel, par le go2rtc viewer). */
+  @Column({ name: "live_mode", type: "varchar", length: 8, default: "webrtc" })
+  liveMode: "webrtc" | "mse";
+
   /** Adresse de go2rtc telle que les DVR la joignent (IP LAN, pas 127.0.0.1). */
   @Column({ name: "onvif_host", length: 128 })
   onvifHost: string;

@@ -76,6 +76,7 @@ export class DvrsService {
       dvrUser: d.username,
       dvrPassword: decryptSecret(d.passwordEnc),
       go2rtcUrl: g.go2rtcUrl,
+      go2rtcViewerUrl: g.viewerGo2rtcUrl,
       go2rtcOnvifHost: g.onvifHost,
       go2rtcOnvifPort: g.onvifPort,
       go2rtcOnvifUser: g.onvifUser,
