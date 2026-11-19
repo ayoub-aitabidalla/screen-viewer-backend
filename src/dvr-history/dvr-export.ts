@@ -78,10 +78,23 @@ export async function exportRange(
   }
 }
 
-/** Lance ffmpeg (FFMPEG_PATH du .env, sinon celui du PATH). */
+/**
+ * Binaire ffmpeg : FFMPEG_PATH du .env, sinon celui livré par @ffmpeg-installer (hébergeurs sans ffmpeg,
+ * ex. Cloudways), sinon celui du PATH.
+ */
+function ffmpegPath(): string {
+  if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+  try {
+    return (require("@ffmpeg-installer/ffmpeg") as { path: string }).path;
+  } catch {
+    return "ffmpeg";
+  }
+}
+
+/** Lance ffmpeg. */
 function ffmpeg(args: string[], signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const p = spawn(process.env.FFMPEG_PATH || "ffmpeg", args, { windowsHide: true, signal });
+    const p = spawn(ffmpegPath(), args, { windowsHide: true, signal });
     let err = "";
     p.stderr.on("data", (d) => (err = (err + d).slice(-2000)));
     p.on("error", (e) => reject(new Error(`ffmpeg introuvable (installez-le ou renseignez FFMPEG_PATH) : ${e.message}`)));
