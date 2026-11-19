@@ -1,5 +1,5 @@
 import "dotenv/config";
-import * as bcrypt from "bcrypt";
+import * as bcrypt from "bcryptjs";
 import { DataSource } from "typeorm";
 import { Tenant } from "../tenants/tenant.entity";
 import { User } from "../users/user.entity";

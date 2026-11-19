@@ -4,7 +4,7 @@
 # ---- Étape 1 : compilation ----
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
-# Outils de compilation au cas où un module natif (bcrypt) n'a pas de binaire précompilé pour cette plateforme.
+# Outils de compilation au cas où un module natif (ex. bcrypt) n'a pas de binaire précompilé pour cette plateforme.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
