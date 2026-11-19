@@ -15,6 +15,8 @@ export function dbOptions(env: NodeJS.ProcessEnv = process.env): DataSourceOptio
     database: env.DB_NAME ?? "screenviewer",
     username: env.DB_USER ?? "screenviewer",
     password: env.DB_PASSWORD ?? "screenviewer",
+    // DB_SSL=true : connexion chiffrée, exigée par les bases hébergées (Neon, Supabase…).
+    ssl: env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
     entities: [Tenant, User, Gateway, Dvr, Camera],
     // Schéma synchronisé automatiquement : suffisant pour démarrer, à remplacer par des migrations.
     synchronize: true,
