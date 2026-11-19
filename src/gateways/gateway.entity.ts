@@ -96,6 +96,18 @@ export class Gateway {
   accessClientSecretEnc: string | null;
 
   /**
+   * Page/API de ScreenGateway du site (ex. "http://127.0.0.1:8080" ou "https://s-<site>-gw.domaine.com").
+   * Avec sa clé, les postes sont enregistrés sur le DVR par le go2rtc dédié de chaque écran (un port, un profil).
+   * Null = ancien mode : un seul go2rtc (go2rtcUrl) avec un profil par écran.
+   */
+  @Column({ name: "screen_gateway_url", type: "varchar", length: 256, nullable: true })
+  screenGatewayUrl: string | null;
+
+  /** Clé d'API ScreenGateway (générée sur sa page), chiffrée. Jamais renvoyée par l'API. */
+  @Column({ name: "screen_gateway_key_enc", type: "text", nullable: true, select: false })
+  screenGatewayKeyEnc: string | null;
+
+  /**
    * Site créé automatiquement par l'API Cloudflare (null = passerelle saisie à la main). Identifiant court du
    * site : ses noms publics sont s-<siteSlug>-mtx, -play, -go2rtc et -live sous CF_DOMAIN.
    */

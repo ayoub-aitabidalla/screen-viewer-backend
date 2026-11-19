@@ -15,6 +15,7 @@ const SERVICES = {
   play: "http://localhost:9996", // relecture MediaMTX
   go2rtc: "http://localhost:1984", // go2rtc des postes (ONVIF pour les DVR)
   live: "http://localhost:1980", // go2rtc viewer (direct MSE, relecture DVR)
+  gw: "http://localhost:8080", // ScreenGateway (écrans et leurs ports ONVIF, page d'administration)
 } as const;
 
 /** Nom du service Windows installé sur le serveur du site (distinct de tout autre cloudflared de la machine). */
@@ -71,6 +72,7 @@ export class SiteProvisioningService {
       play: `s-${slug}-play.${d}`,
       go2rtc: `s-${slug}-go2rtc.${d}`,
       live: `s-${slug}-live.${d}`,
+      gw: `s-${slug}-gw.${d}`,
     };
   }
 
@@ -108,6 +110,8 @@ export class SiteProvisioningService {
           recordingsDir: null,
           go2rtcUrl: `https://${hosts.go2rtc}`,
           viewerGo2rtcUrl: `https://${hosts.live}`,
+          // La clé se génère sur la page de ScreenGateway, puis se colle dans la passerelle.
+          screenGatewayUrl: `https://${hosts.gw}`,
           liveMode: "mse",
           onvifHost: dto.serverLanIp,
           onvifPort: 1984,
@@ -128,7 +132,7 @@ export class SiteProvisioningService {
     }
   }
 
-  /** Règles fixes du tunnel d'un site : ses 4 services locaux. */
+  /** Règles fixes du tunnel d'un site : ses services locaux (SERVICES). */
   private baseRules(slug: string): IngressRule[] {
     const hosts = this.hostnames(slug);
     return (Object.keys(SERVICES) as (keyof typeof SERVICES)[]).map((k) => ({ hostname: hosts[k], service: SERVICES[k] }));

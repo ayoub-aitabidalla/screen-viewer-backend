@@ -85,6 +85,8 @@ export class DvrsService {
       go2rtcOnvifPassword: g.onvifPassword,
       mediamtxRtspUrl: g.mediamtxRtspUrl,
       mediamtxApiUrl: g.mediamtxApiUrl,
+      screenGatewayUrl: g.screenGatewayUrl,
+      screenGatewayKey: g.screenGatewayKey,
     };
   }
 

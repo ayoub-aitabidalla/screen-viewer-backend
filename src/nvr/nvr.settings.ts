@@ -1,6 +1,7 @@
 import { siteFetcher, type SiteAccess } from "../sites/site-fetch";
 import { DvrClient } from "./dvr.client";
 import { Go2rtcClient } from "./go2rtc.client";
+import { ScreenGatewayClient } from "./screen-gateway.client";
 
 /** Réglages d'accès à un DVR et à la passerelle vidéo (go2rtc / MediaMTX) de son site. */
 export interface NvrSettings {
@@ -23,6 +24,9 @@ export interface NvrSettings {
   /** Base RTSP de MediaMTX vue par go2rtc, ex. rtsp://127.0.0.1:8554 */
   mediamtxRtspUrl: string;
   mediamtxApiUrl: string;
+  /** ScreenGateway du site et sa clé : si présents, un go2rtc dédié par écran (voir CamerasService). */
+  screenGatewayUrl?: string | null;
+  screenGatewayKey?: string | null;
 }
 
 /**
@@ -59,6 +63,12 @@ export function dvrClientFor(s: NvrSettings, timeoutMs?: number): DvrClient {
     fetch: siteFetcher(s.access),
     timeoutMs,
   });
+}
+
+/** Client ScreenGateway du site, ou null en ancien mode (go2rtc unique). */
+export function screenGatewayClientFor(s: NvrSettings): ScreenGatewayClient | null {
+  if (!s.screenGatewayUrl || !s.screenGatewayKey) return null;
+  return new ScreenGatewayClient(s.screenGatewayUrl, s.screenGatewayKey, siteFetcher(s.access));
 }
 
 /** Client de l'API go2rtc du site, qui passe par son tunnel si besoin. */

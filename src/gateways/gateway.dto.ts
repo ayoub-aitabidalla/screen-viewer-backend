@@ -27,6 +27,9 @@ export class CreateGatewayDto {
    */
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 128) accessClientId?: string;
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 256) accessClientSecret?: string;
+  /** ScreenGateway du site (un go2rtc par écran). Vide = ancien mode. */
+  @IsOptional() @ValidateIf(filled) @IsUrl(HTTP) screenGatewayUrl?: string | null;
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(8, 256) screenGatewayKey?: string;
 }
 
 /** Création automatique d'un site (tunnel, noms, Access) : seuls le nom et l'IP locale du serveur sont saisis. */
@@ -55,4 +58,8 @@ export class UpdateGatewayDto {
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 128) accessClientId?: string;
   /** Fourni seulement pour le changer. */
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 256) accessClientSecret?: string;
+  /** Vide = repasser à l'ancien mode (la clé est alors effacée aussi). */
+  @IsOptional() @ValidateIf(filled) @IsUrl(HTTP) screenGatewayUrl?: string | null;
+  /** Fournie seulement pour la changer. */
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(8, 256) screenGatewayKey?: string;
 }

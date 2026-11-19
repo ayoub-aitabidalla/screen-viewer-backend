@@ -34,6 +34,13 @@ export class Camera {
   @Column({ name: "go2rtc_name", length: 128 })
   go2rtcName: string;
 
+  /**
+   * Port ONVIF du go2rtc dédié à cet écran (ScreenGateway) ; le canal utilise alors le profil 1.
+   * Null = ancien mode : go2rtc unique, profil choisi par position (go2rtcName).
+   */
+  @Column({ name: "onvif_port", type: "int", nullable: true })
+  onvifPort: number | null;
+
   /** Id du canal IP sur le DVR (InputProxy). */
   @Column({ name: "dvr_channel_id", type: "int" })
   dvrChannelId: number;

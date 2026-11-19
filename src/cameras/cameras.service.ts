@@ -12,7 +12,8 @@ import { Repository } from "typeorm";
 import { DvrsService } from "../dvrs/dvrs.service";
 import { DvrChannel, DvrClient, DvrError } from "../nvr/dvr.client";
 import { Go2rtcClient } from "../nvr/go2rtc.client";
-import { dvrClientFor, go2rtcClientFor, NvrSettings } from "../nvr/nvr.settings";
+import { dvrClientFor, go2rtcClientFor, NvrSettings, screenGatewayClientFor } from "../nvr/nvr.settings";
+import type { GatewayScreen, ScreenGatewayClient } from "../nvr/screen-gateway.client";
 import { siteFetch } from "../sites/site-fetch";
 import { Camera } from "./camera.entity";
 import { CreateCameraDto, UpdateCameraDto } from "./camera.dto";
@@ -25,6 +26,8 @@ export interface CameraView {
   name: string;
   streamPath: string;
   dvrChannelId: number;
+  /** Port ONVIF du go2rtc dédié (ScreenGateway), null en ancien mode. */
+  onvifPort: number | null;
   /** online/offline : statut du canal sur le DVR ; missing : canal absent du DVR ; unknown : DVR injoignable. */
   state: CameraState;
   detail: string | null;
@@ -54,6 +57,11 @@ interface DvrCtx {
   s: NvrSettings;
   dvr: DvrClient;
   go2rtc: Go2rtcClient;
+  /**
+   * ScreenGateway du site, s'il est configuré : chaque écran a son go2rtc (port fixe, un seul profil). Dans ce
+   * mode, le backend n'écrit jamais dans go2rtc. Null = ancien mode (go2rtc unique, profil par position).
+   */
+  sg: ScreenGatewayClient | null;
 }
 
 /** Réessaie une opération DVR : juste après un ajout, le DVR refuse un moment les modifications du canal. */
@@ -103,6 +111,7 @@ export class CamerasService implements OnApplicationBootstrap {
       s,
       dvr: dvrClientFor(s),
       go2rtc: go2rtcClientFor(s),
+      sg: screenGatewayClientFor(s),
     };
   }
 
@@ -125,18 +134,19 @@ export class CamerasService implements OnApplicationBootstrap {
     }
   }
 
-  /** Canaux du DVR qui pointent vers le go2rtc de ce site. */
+  /** Canaux du DVR qui pointent vers le go2rtc unique de ce site (ancien mode). */
   private ours(c: DvrCtx, ch: DvrChannel) {
     return ch.protocol === "ONVIF" && ch.ipAddress === c.s.go2rtcOnvifHost && ch.port === c.s.go2rtcOnvifPort;
   }
 
-  private channelInput(c: DvrCtx, cam: Pick<Camera, "dvrChannelId" | "name">, srcInputPort: number) {
+  /** Canal ONVIF : go2rtc dédié de l'écran (port propre, profil 1) en mode ScreenGateway, sinon go2rtc unique. */
+  private channelInput(c: DvrCtx, cam: Pick<Camera, "dvrChannelId" | "name" | "onvifPort">, srcInputPort: number) {
     return {
       id: cam.dvrChannelId,
       name: cam.name,
       ipAddress: c.s.go2rtcOnvifHost,
-      port: c.s.go2rtcOnvifPort,
-      srcInputPort,
+      port: cam.onvifPort ?? c.s.go2rtcOnvifPort,
+      srcInputPort: cam.onvifPort ? 1 : srcInputPort,
       userName: c.s.go2rtcOnvifUser,
       password: c.s.go2rtcOnvifPassword,
     };
@@ -176,6 +186,7 @@ export class CamerasService implements OnApplicationBootstrap {
           name: x.name,
           streamPath: x.streamPath,
           dvrChannelId: x.dvrChannelId,
+          onvifPort: x.onvifPort,
           state,
           detail: st?.detail ?? null,
           createdAt: x.createdAt,
@@ -199,6 +210,7 @@ export class CamerasService implements OnApplicationBootstrap {
       const streamPath = dto.streamPath.replace(/^\/+|\/+$/g, "");
       if (await this.repo.findOneBy({ dvrId, streamPath }))
         throw new ConflictException({ message: `Le flux ${streamPath} est déjà configuré`, code: null });
+      if (c.sg) return this.createDedicated(c, dto.name, streamPath);
       const go2rtcName = toGo2rtcName(streamPath);
 
       let createdStream = false;
@@ -216,7 +228,7 @@ export class CamerasService implements OnApplicationBootstrap {
         let id = 1;
         while (used.has(id)) id++;
 
-        const cam = this.repo.create({ tenantId, dvrId, name: dto.name, streamPath, go2rtcName, dvrChannelId: id });
+        const cam = this.repo.create({ tenantId, dvrId, name: dto.name, streamPath, go2rtcName, dvrChannelId: id, onvifPort: null });
         // Le DVR attribue son propre id et un nom générique (« IPCamera 0x ») : on récupère l'id, puis on applique le nom.
         cam.dvrChannelId = await c.dvr.addChannel(this.channelInput(c, cam, port));
         try {
@@ -245,7 +257,8 @@ export class CamerasService implements OnApplicationBootstrap {
       const cam = await this.camera(tenantId, id);
       const c = await this.ctx(tenantId, dvrId);
       try {
-        const port = (await c.go2rtc.onvifProfileOrder()).indexOf(cam.go2rtcName) + 1;
+        // go2rtc dédié : profil 1 ; ancien mode : position du profil dans le go2rtc unique.
+        const port = cam.onvifPort ? 1 : (await c.go2rtc.onvifProfileOrder()).indexOf(cam.go2rtcName) + 1;
         if (port === 0) throw new Error(`go2rtc n'expose pas le profil ONVIF "${cam.go2rtcName}"`);
         await c.dvr.updateChannel(this.channelInput(c, { ...cam, name: dto.name }, port));
       } catch (e) {
@@ -270,6 +283,8 @@ export class CamerasService implements OnApplicationBootstrap {
         throw upstream(e);
       }
       await this.repo.remove(cam);
+      // go2rtc dédié (ScreenGateway) : rien à retirer, le port reste réservé à l'écran.
+      if (c.sg || cam.onvifPort) return;
       await c.go2rtc.deleteStream(cam.go2rtcName).catch((e) => this.log.warn(`Suppression flux go2rtc : ${e.message}`));
       await this.realign(c).catch((e) => this.log.warn(`Réalignement : ${e.message}`));
     });
@@ -280,7 +295,9 @@ export class CamerasService implements OnApplicationBootstrap {
    * et recrée dans go2rtc les flux manquants (ex. go2rtc redémarré sans eux).
    */
   private async realign(c: DvrCtx): Promise<number> {
-    const cams = await this.repo.findBy({ tenantId: c.tenantId, dvrId: c.dvrId });
+    if (c.sg) return this.realignDedicated(c, await c.sg.screens());
+    const cams = (await this.repo.findBy({ tenantId: c.tenantId, dvrId: c.dvrId })).filter((x) => !x.onvifPort);
+    if (!cams.length) return 0;
     const streams = await c.go2rtc.streams();
     for (const x of cams) if (!streams.has(x.go2rtcName)) await c.go2rtc.putStream(x.go2rtcName, `${rtspBase(c.s)}/${x.streamPath}`);
     const order = await c.go2rtc.onvifProfileOrder();
@@ -304,6 +321,7 @@ export class CamerasService implements OnApplicationBootstrap {
     const dvrId = (await this.dvrs.resolve(tenantId, dvrIdOrNone)).id;
     return this.exclusive(dvrId, async () => {
       const c = await this.ctx(tenantId, dvrId);
+      if (c.sg) return this.syncDedicated(c).catch((e) => Promise.reject(upstream(e)));
       try {
         const [channels, cams, order, streams] = await Promise.all([
           c.dvr.listChannels(),
@@ -319,7 +337,7 @@ export class CamerasService implements OnApplicationBootstrap {
           if (!go2rtcName || cams.some((x) => x.go2rtcName === go2rtcName)) continue;
           const src = streams.get(go2rtcName);
           const streamPath = src?.startsWith(base + "/") ? src.slice(base.length + 1) : go2rtcName.replace(/_(\d+)$/, "/$1");
-          const cam = this.repo.create({ tenantId, dvrId, name: ch.name.slice(0, 32), streamPath, go2rtcName, dvrChannelId: ch.id });
+          const cam = this.repo.create({ tenantId, dvrId, name: ch.name.slice(0, 32), streamPath, go2rtcName, dvrChannelId: ch.id, onvifPort: null });
           await c.dvr.updateChannel(this.channelInput(c, cam, ch.srcInputPort));
           await this.repo.save(cam);
           cams.push(cam);
@@ -333,12 +351,108 @@ export class CamerasService implements OnApplicationBootstrap {
     });
   }
 
+  /**
+   * Mode ScreenGateway : le canal pointe vers le go2rtc dédié de l'écran (onvifHost:port, profil 1). Aucune
+   * écriture dans go2rtc, donc aucun ordre de profils à surveiller.
+   */
+  private async createDedicated(c: DvrCtx, name: string, streamPath: string): Promise<Camera> {
+    try {
+      const scr = (await c.sg!.screens()).find((x) => x.path === streamPath);
+      if (!scr)
+        throw new ConflictException({
+          message: `ScreenGateway ne connaît pas l'écran ${streamPath} : lancez ScreenAgent sur ce poste au moins une fois`,
+          code: "unknownScreen",
+        });
+      const used = new Set((await c.dvr.listChannels()).map((x) => x.id));
+      let id = 1;
+      while (used.has(id)) id++;
+      const cam = this.repo.create({
+        tenantId: c.tenantId,
+        dvrId: c.dvrId,
+        name,
+        streamPath,
+        go2rtcName: `sg-${scr.onvifPort}`,
+        dvrChannelId: id,
+        onvifPort: scr.onvifPort,
+      });
+      cam.dvrChannelId = await c.dvr.addChannel(this.channelInput(c, cam, 1));
+      try {
+        await retry(() => c.dvr.updateChannel(this.channelInput(c, cam, 1)));
+      } catch (e) {
+        await retry(() => c.dvr.deleteChannel(cam.dvrChannelId)).catch((err) =>
+          this.log.error(`Annulation impossible : canal ${cam.dvrChannelId} à retirer à la main (${err.message})`),
+        );
+        throw e;
+      }
+      return await this.repo.save(cam);
+    } catch (e) {
+      throw upstream(e);
+    }
+  }
+
+  /** Mode ScreenGateway : remet chaque canal sur le port actuel de son écran (si ScreenGateway l'a changé). */
+  private async realignDedicated(c: DvrCtx, screens: GatewayScreen[]): Promise<number> {
+    const cams = (await this.repo.findBy({ tenantId: c.tenantId, dvrId: c.dvrId })).filter((x) => x.onvifPort);
+    if (!cams.length) return 0;
+    const byPath = new Map(screens.map((x) => [x.path, x]));
+    const channels = await c.dvr.listChannels();
+    let fixed = 0;
+    for (const x of cams) {
+      const scr = byPath.get(x.streamPath);
+      const ch = channels.find((y) => y.id === x.dvrChannelId);
+      if (!scr || !ch || (ch.port === scr.onvifPort && ch.srcInputPort === 1 && x.onvifPort === scr.onvifPort)) continue;
+      x.onvifPort = scr.onvifPort;
+      x.go2rtcName = `sg-${scr.onvifPort}`;
+      await c.dvr.updateChannel(this.channelInput(c, x, 1));
+      await this.repo.save(x);
+      fixed++;
+    }
+    return fixed;
+  }
+
+  /** Mode ScreenGateway : importe les canaux du DVR qui visent déjà le go2rtc d'un écran connu, puis réaligne. */
+  private async syncDedicated(c: DvrCtx): Promise<{ imported: number; repaired: number }> {
+    const [screens, channels, cams] = await Promise.all([
+      c.sg!.screens(),
+      c.dvr.listChannels(),
+      this.repo.findBy({ tenantId: c.tenantId, dvrId: c.dvrId }),
+    ]);
+    const byPort = new Map(screens.map((x) => [x.onvifPort, x]));
+    const managed = new Set(cams.map((x) => x.dvrChannelId));
+    let imported = 0;
+    for (const ch of channels) {
+      const scr = ch.protocol === "ONVIF" && ch.ipAddress === c.s.go2rtcOnvifHost ? byPort.get(ch.port) : undefined;
+      if (!scr || managed.has(ch.id) || cams.some((x) => x.streamPath === scr.path)) continue;
+      const cam = this.repo.create({
+        tenantId: c.tenantId,
+        dvrId: c.dvrId,
+        name: ch.name.slice(0, 32),
+        streamPath: scr.path,
+        go2rtcName: `sg-${scr.onvifPort}`,
+        dvrChannelId: ch.id,
+        onvifPort: scr.onvifPort,
+      });
+      await c.dvr.updateChannel(this.channelInput(c, cam, 1));
+      await this.repo.save(cam);
+      cams.push(cam);
+      imported++;
+    }
+    return { imported, repaired: await this.realignDedicated(c, screens) };
+  }
+
   /** Flux publiés dans le MediaMTX du site par les postes, pour proposer ceux qui ne sont pas encore configurés. */
   async availableStreams(tenantId: string, dvrId?: string): Promise<string[]> {
     if (!dvrId && (await this.dvrs.list(tenantId)).length === 0) return [];
     const d = await this.dvrs.resolve(tenantId, dvrId);
     const configured = new Set((await this.repo.findBy({ tenantId, dvrId: d.id })).map((x) => x.streamPath));
     const s = await this.dvrs.settings(tenantId, d.id);
+    // ScreenGateway : les écrans qu'il connaît (même éteints, leur port leur reste réservé).
+    const sg = screenGatewayClientFor(s);
+    if (sg)
+      return (await sg.screens().catch(() => [] as GatewayScreen[]))
+        .map((x) => x.path)
+        .filter((n) => !configured.has(n))
+        .sort();
     const mtx = s.mediamtxApiUrl.replace(/\/$/, "");
     try {
       const res = await siteFetch(s.access, `${mtx}/v3/paths/list?itemsPerPage=1000`, { signal: AbortSignal.timeout(8000) });
