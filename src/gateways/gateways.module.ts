@@ -6,11 +6,12 @@ import { UsersModule } from "../users/users.module";
 import { Gateway } from "./gateway.entity";
 import { GatewaysController } from "./gateways.controller";
 import { GatewaysService } from "./gateways.service";
+import { SiteProvisioningService } from "./site-provisioning.service";
 
 @Module({
   imports: [TypeOrmModule.forFeature([Gateway, Dvr]), UsersModule],
   controllers: [GatewaysController],
-  providers: [GatewaysService, AdminGuard],
+  providers: [GatewaysService, SiteProvisioningService, AdminGuard],
   exports: [GatewaysService],
 })
 export class GatewaysModule {}

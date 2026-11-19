@@ -2,17 +2,16 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { decryptSecret, encryptSecret } from "../common/secret-box";
-import { Dvr } from "../dvrs/dvr.entity";
 import { Go2rtcClient } from "../nvr/go2rtc.client";
 import { cloudflareError, siteFetch, siteFetcher, type SiteAccess } from "../sites/site-fetch";
 import { CreateGatewayDto, UpdateGatewayDto } from "./gateway.dto";
 import { Gateway } from "./gateway.entity";
 
 /** Vue renvoyée par l'API : sans mot de passe ni secret Access. */
-export type GatewayView = Omit<Gateway, "onvifPasswordEnc" | "accessClientSecretEnc" | "tenant">;
+export type GatewayView = Omit<Gateway, "onvifPasswordEnc" | "accessClientSecretEnc" | "tenant" | "cfResources" | "tunnelTokenEnc">;
 
-const view = (g: Gateway): GatewayView => {
-  const { onvifPasswordEnc, accessClientSecretEnc, tenant, ...rest } = g;
+export const view = (g: Gateway): GatewayView => {
+  const { onvifPasswordEnc, accessClientSecretEnc, tenant, cfResources, tunnelTokenEnc, ...rest } = g;
   return rest;
 };
 
@@ -32,7 +31,6 @@ function assertAccessPair(id: string | null | undefined, secret: string | null |
 export class GatewaysService {
   constructor(
     @InjectRepository(Gateway) private readonly repo: Repository<Gateway>,
-    @InjectRepository(Dvr) private readonly dvrs: Repository<Dvr>,
   ) {}
 
   async list(tenantId: string): Promise<GatewayView[]> {
@@ -115,18 +113,6 @@ export class GatewaysService {
     );
     await this.repo.update({ id, tenantId }, patch);
     return view(await this.get(tenantId, id));
-  }
-
-  /** Refusé tant qu'un DVR utilise cette passerelle. */
-  async remove(tenantId: string, id: string): Promise<void> {
-    await this.get(tenantId, id);
-    const n = await this.dvrs.countBy({ gatewayId: id, tenantId });
-    if (n > 0)
-      throw new ConflictException({
-        message: `${n} DVR utilise(nt) encore cette passerelle : changez leur passerelle ou supprimez-les d'abord`,
-        code: "gatewayInUse",
-      });
-    await this.repo.delete({ id, tenantId });
   }
 
   /** Test de MediaMTX (API) et de go2rtc avec les réglages enregistrés. */

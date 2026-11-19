@@ -29,6 +29,13 @@ export class CreateGatewayDto {
   @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 256) accessClientSecret?: string;
 }
 
+/** Création automatique d'un site (tunnel, noms, Access) : seuls le nom et l'IP locale du serveur sont saisis. */
+export class ProvisionSiteDto {
+  @IsString() @Length(1, 64) name: string;
+  /** IP du serveur du site sur le réseau local, telle que les DVR la joignent (adresse ONVIF). */
+  @IsString() @Matches(HOST, { message: "serverLanIp : adresse IP ou nom, sans port" }) serverLanIp: string;
+}
+
 /** Champs absents = inchangés ; le mot de passe ONVIF n'est modifié que s'il est fourni. */
 export class UpdateGatewayDto {
   @IsOptional() @IsString() @Length(1, 64) name?: string;

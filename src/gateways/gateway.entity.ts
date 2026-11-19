@@ -1,6 +1,15 @@
 import { Column, CreateDateColumn, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
 import { Tenant } from "../tenants/tenant.entity";
 
+/** Identifiants Cloudflare créés pour un site automatique. */
+export interface SiteResources {
+  tunnelId?: string;
+  dnsIds?: string[];
+  serviceTokenId?: string;
+  policyId?: string;
+  appId?: string;
+}
+
 /**
  * Passerelle vidéo d'un site client : MediaMTX (reçoit les écrans des postes, sert le direct et la relecture)
  * + go2rtc (présente les flux aux DVR comme caméras ONVIF). Tous les flux d'une passerelle appartiennent à son client.
@@ -85,6 +94,21 @@ export class Gateway {
   /** Secret du jeton Access, chiffré. Jamais renvoyé par l'API. */
   @Column({ name: "access_client_secret_enc", type: "text", nullable: true, select: false })
   accessClientSecretEnc: string | null;
+
+  /**
+   * Site créé automatiquement par l'API Cloudflare (null = passerelle saisie à la main). Identifiant court du
+   * site : ses noms publics sont s-<siteSlug>-mtx, -play, -go2rtc et -live sous CF_DOMAIN.
+   */
+  @Column({ name: "site_slug", type: "varchar", length: 16, nullable: true, unique: true })
+  siteSlug: string | null;
+
+  /** Ressources Cloudflare du site (tunnel, DNS, jeton, stratégie, application), pour les supprimer avec lui. */
+  @Column({ name: "cf_resources", type: "jsonb", nullable: true, select: false })
+  cfResources: SiteResources | null;
+
+  /** Jeton du tunnel (pour l'installateur du site), chiffré. Jamais renvoyé par la liste. */
+  @Column({ name: "tunnel_token_enc", type: "text", nullable: true, select: false })
+  tunnelTokenEnc: string | null;
 
   @CreateDateColumn({ name: "created_at" })
   createdAt: Date;
