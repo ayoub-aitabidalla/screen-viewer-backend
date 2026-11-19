@@ -44,6 +44,17 @@ export class Dvr {
   @Column({ name: "lan_host", type: "varchar", length: 128, nullable: true })
   lanHost: string | null;
 
+  /**
+   * Nom public créé automatiquement dans le tunnel du site (passerelle créée par l'API Cloudflare), ex.
+   * "s-a7k2b9-dvr-3f1c.domaine.com" → http://<lanHost>:80. Null = adresse saisie à la main.
+   */
+  @Column({ name: "site_host", type: "varchar", length: 128, nullable: true })
+  siteHost: string | null;
+
+  /** Enregistrement DNS de siteHost, pour le supprimer avec le DVR. */
+  @Column({ name: "site_dns_id", type: "varchar", length: 64, nullable: true, select: false })
+  siteDnsId: string | null;
+
   @Column({ length: 64 })
   username: string;
 

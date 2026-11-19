@@ -9,7 +9,8 @@ const filled = (_: unknown, v: unknown) => v !== null && v !== undefined && v !=
 
 export class CreateDvrDto {
   @IsString() @Length(1, 64) name: string;
-  @IsString() @Length(1, 128) @Matches(HOST, { message: HOST_MSG }) host: string;
+  /** Facultatif sur un site créé automatiquement : l'adresse du tunnel est alors créée par le serveur. */
+  @IsOptional() @ValidateIf(filled) @IsString() @Length(1, 128) @Matches(HOST, { message: HOST_MSG }) host?: string;
   /** Obligatoire quand host est une URL de tunnel (contrôlé par le service). */
   @IsOptional() @ValidateIf(filled) @IsString() @Matches(LAN, { message: "lanHost : adresse IP locale du DVR, sans port" }) lanHost?: string | null;
   @IsString() @Length(1, 64) username: string;

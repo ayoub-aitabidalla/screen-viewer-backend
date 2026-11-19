@@ -133,6 +133,19 @@ export class CloudflareApi {
     return r.id;
   }
 
+  /** Remplace la liste des noms protégés par l'application (ajout ou retrait d'un DVR du site). */
+  async updateAccessApp(id: string, name: string, hostnames: string[], policyId: string): Promise<void> {
+    await this.call("PUT", this.acc(`/access/apps/${id}`), {
+      name,
+      type: "self_hosted",
+      domain: hostnames[0],
+      destinations: hostnames.map((uri) => ({ type: "public", uri })),
+      session_duration: "24h",
+      app_launcher_visible: false,
+      policies: [{ id: policyId, precedence: 1 }],
+    });
+  }
+
   async deleteAccessApp(id: string): Promise<void> {
     await this.call("DELETE", this.acc(`/access/apps/${id}`));
   }

@@ -4,15 +4,16 @@ import { Repository } from "typeorm";
 import { Camera } from "../cameras/camera.entity";
 import { decryptSecret, encryptSecret } from "../common/secret-box";
 import { GatewaysService } from "../gateways/gateways.service";
+import { SiteProvisioningService } from "../gateways/site-provisioning.service";
 import { dvrClientFor, NvrSettings } from "../nvr/nvr.settings";
 import { CreateDvrDto, UpdateDvrDto } from "./dvr.dto";
 import { Dvr } from "./dvr.entity";
 
 /** Vue renvoyée par l'API : sans aucun mot de passe. */
-export type DvrView = Omit<Dvr, "passwordEnc" | "tenant" | "gateway">;
+export type DvrView = Omit<Dvr, "passwordEnc" | "tenant" | "gateway" | "siteDnsId">;
 
 const view = (d: Dvr): DvrView => {
-  const { passwordEnc, tenant, gateway, ...rest } = d;
+  const { passwordEnc, tenant, gateway, siteDnsId, ...rest } = d;
   return rest;
 };
 
@@ -31,6 +32,7 @@ export class DvrsService {
     @InjectRepository(Dvr) private readonly repo: Repository<Dvr>,
     @InjectRepository(Camera) private readonly cameras: Repository<Camera>,
     private readonly gateways: GatewaysService,
+    private readonly sites: SiteProvisioningService,
   ) {}
 
   async list(tenantId: string): Promise<DvrView[]> {
@@ -89,19 +91,63 @@ export class DvrsService {
   async create(tenantId: string, dto: CreateDvrDto): Promise<DvrView> {
     const { password, lanHost, ...rest } = dto;
     await this.assertNameFree(tenantId, dto.name);
-    await this.gateways.get(tenantId, dto.gatewayId); // la passerelle doit appartenir au même client
+    const g = await this.gateways.get(tenantId, dto.gatewayId); // la passerelle doit appartenir au même client
+    if (g.siteSlug) return this.createOnSite(tenantId, dto);
+    if (!dto.host)
+      throw new BadRequestException({ message: "Adresse ISAPI du DVR obligatoire (ex. 192.168.1.64)", code: "hostRequired" });
     assertLanHost(dto.host, lanHost);
-    const d = this.repo.create({ ...rest, lanHost: lanHost || null, tenantId, passwordEnc: encryptSecret(password) });
+    const d = this.repo.create({ ...rest, host: dto.host, lanHost: lanHost || null, tenantId, passwordEnc: encryptSecret(password) });
     return view(await this.repo.save(d));
+  }
+
+  /**
+   * DVR d'un site créé automatiquement : seule son IP locale est saisie ; son adresse publique est créée dans
+   * le tunnel du site et protégée par son application Access. Tout est annulé si une étape échoue.
+   */
+  private async createOnSite(tenantId: string, dto: CreateDvrDto): Promise<DvrView> {
+    const { password, lanHost, host: _ignored, ...rest } = dto;
+    if (!lanHost)
+      throw new BadRequestException({ message: "Adresse IP locale du DVR obligatoire (ex. 192.168.1.64)", code: "lanHostRequired" });
+    const created = await this.sites.createDvrHost(dto.gatewayId).catch((e: Error) => {
+      throw new BadRequestException({ message: `Création de l'adresse du DVR impossible : ${e.message}`, code: "provisioningFailed" });
+    });
+    let saved: Dvr | null = null;
+    try {
+      saved = await this.repo.save(
+        this.repo.create({
+          ...rest,
+          host: `https://${created.host}`,
+          lanHost,
+          siteHost: created.host,
+          siteDnsId: created.dnsId,
+          tenantId,
+          passwordEnc: encryptSecret(password),
+        }),
+      );
+      await this.sites.syncSite(dto.gatewayId);
+      return view(saved);
+    } catch (e) {
+      if (saved) await this.repo.delete({ id: saved.id });
+      await this.sites.deleteDvrHost(created.dnsId);
+      await this.sites.syncSite(dto.gatewayId).catch(() => undefined);
+      throw new BadRequestException({ message: `Création de l'adresse du DVR impossible : ${(e as Error).message}`, code: "provisioningFailed" });
+    }
   }
 
   async update(tenantId: string, id: string, dto: UpdateDvrDto): Promise<DvrView> {
     const d = await this.get(tenantId, id);
     const { password, lanHost, ...rest } = dto;
     if (rest.name && rest.name !== d.name) await this.assertNameFree(tenantId, rest.name);
+    // Adresse d'un DVR de site automatique : gérée par le serveur, non modifiable.
+    if (d.siteHost) delete rest.host;
     assertLanHost(rest.host ?? d.host, lanHost !== undefined ? lanHost : d.lanHost);
     if (rest.gatewayId && rest.gatewayId !== d.gatewayId) {
-      await this.gateways.get(tenantId, rest.gatewayId);
+      const target = await this.gateways.get(tenantId, rest.gatewayId);
+      if (d.siteHost || target.siteSlug)
+        throw new ConflictException({
+          message: "Un DVR ne peut pas changer de site créé automatiquement : supprimez-le puis ajoutez-le sur l'autre passerelle",
+          code: "siteDvrMove",
+        });
       // Les canaux existants pointent vers l'ancien go2rtc : il faut d'abord retirer les postes.
       if (await this.cameras.countBy({ dvrId: id, tenantId }))
         throw new ConflictException({ message: "Retirez d'abord les postes enregistrés par ce DVR avant de changer de passerelle", code: "dvrHasCameras" });
@@ -110,15 +156,27 @@ export class DvrsService {
     if (lanHost !== undefined) patch.lanHost = lanHost || null;
     if (password) patch.passwordEnc = encryptSecret(password);
     await this.repo.update({ id, tenantId }, patch);
+    // Nouvelle IP locale d'un DVR de site automatique : le tunnel doit pointer vers elle.
+    if (d.siteHost && patch.lanHost !== undefined && patch.lanHost !== d.lanHost) await this.sites.syncSite(d.gatewayId);
     return view(await this.get(tenantId, id));
   }
 
   /** Refusé tant que des caméras gérées pointent vers ce DVR (les retirer d'abord). */
   async remove(tenantId: string, id: string): Promise<void> {
-    await this.get(tenantId, id);
+    const d = await this.repo
+      .createQueryBuilder("d")
+      .addSelect("d.siteDnsId")
+      .where("d.id = :id AND d.tenant_id = :tenantId", { id, tenantId })
+      .getOne();
+    if (!d) throw new NotFoundException({ message: "DVR introuvable", code: null });
     const n = await this.cameras.countBy({ dvrId: id, tenantId });
     if (n > 0) throw new ConflictException({ message: `Ce DVR enregistre encore ${n} poste(s) : retirez-les d'abord dans « Postes enregistrés »`, code: "dvrHasCameras" });
     await this.repo.delete({ id, tenantId });
+    // DVR d'un site automatique : on retire son nom public du tunnel et de l'application Access.
+    if (d.siteHost) {
+      await this.sites.deleteDvrHost(d.siteDnsId);
+      await this.sites.syncSite(d.gatewayId).catch(() => undefined);
+    }
   }
 
   /** Test de connexion au DVR avec les réglages enregistrés. */

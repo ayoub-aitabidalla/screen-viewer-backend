@@ -86,11 +86,7 @@ export class SiteProvisioningService {
     try {
       const tunnel = await cf.createTunnel(`screenviewer-${slug}`);
       res.tunnelId = tunnel.id;
-      const rules: IngressRule[] = (Object.keys(SERVICES) as (keyof typeof SERVICES)[]).map((k) => ({
-        hostname: hosts[k],
-        service: SERVICES[k],
-      }));
-      await cf.setIngress(tunnel.id, rules);
+      await cf.setIngress(tunnel.id, this.baseRules(slug));
       for (const h of Object.values(hosts)) res.dnsIds!.push(await cf.createTunnelDns(h, tunnel.id));
       const token = await cf.createServiceToken(label);
       res.serviceTokenId = token.id;
@@ -130,6 +126,59 @@ export class SiteProvisioningService {
       await this.cleanup(res);
       throw new BadRequestException({ message: `Création du site impossible : ${(e as Error).message}`, code: "provisioningFailed" });
     }
+  }
+
+  /** Règles fixes du tunnel d'un site : ses 4 services locaux. */
+  private baseRules(slug: string): IngressRule[] {
+    const hosts = this.hostnames(slug);
+    return (Object.keys(SERVICES) as (keyof typeof SERVICES)[]).map((k) => ({ hostname: hosts[k], service: SERVICES[k] }));
+  }
+
+  private async siteOf(gatewayId: string) {
+    const g = await this.repo
+      .createQueryBuilder("g")
+      .addSelect("g.cfResources")
+      .where("g.id = :gatewayId", { gatewayId })
+      .getOne();
+    if (!g?.siteSlug || !g.cfResources?.tunnelId) return null;
+    return { slug: g.siteSlug, res: g.cfResources, tunnelId: g.cfResources.tunnelId };
+  }
+
+  /**
+   * Crée le nom public d'un nouveau DVR d'un site automatique (DNS vers le tunnel). Les règles du tunnel et
+   * l'application Access sont mises à jour ensuite par syncSite, une fois le DVR enregistré.
+   */
+  async createDvrHost(gatewayId: string): Promise<{ host: string; dnsId: string }> {
+    const cf = this.api();
+    const site = await this.siteOf(gatewayId);
+    if (!site) throw new BadRequestException({ message: "Cette passerelle n'a pas été créée automatiquement", code: "notProvisioned" });
+    const host = `s-${site.slug}-dvr-${randomBytes(2).toString("hex")}.${cf.domain}`;
+    const dnsId = await cf.createTunnelDns(host, site.tunnelId);
+    return { host, dnsId };
+  }
+
+  /** Supprime le nom public d'un DVR retiré (au mieux). */
+  async deleteDvrHost(dnsId: string | null | undefined): Promise<void> {
+    if (!dnsId || !this.cf) return;
+    await this.cf.deleteDns(dnsId).catch((e: Error) => this.log.warn(`Suppression DNS du DVR échouée : ${e.message}`));
+  }
+
+  /**
+   * Recalcule le tunnel d'un site automatique à partir de ses DVR : règles d'entrée (services fixes + un nom
+   * par DVR vers http://<IP locale>:80) et noms protégés par son application Access.
+   */
+  async syncSite(gatewayId: string): Promise<void> {
+    const site = await this.siteOf(gatewayId);
+    if (!site) return;
+    const cf = this.api();
+    const dvrs = await this.dvrs.find({ where: { gatewayId } });
+    const rules = [
+      ...this.baseRules(site.slug),
+      ...dvrs.filter((d) => d.siteHost && d.lanHost).map((d) => ({ hostname: d.siteHost!, service: `http://${d.lanHost}:80` })),
+    ];
+    await cf.setIngress(site.tunnelId, rules);
+    if (site.res.appId && site.res.policyId)
+      await cf.updateAccessApp(site.res.appId, `ScreenViewer - ${site.slug}`, rules.map((r) => r.hostname), site.res.policyId);
   }
 
   /** Infos d'installation d'un site automatique (réaffichables tant que le site existe). */

@@ -12,6 +12,6 @@ import { SiteProvisioningService } from "./site-provisioning.service";
   imports: [TypeOrmModule.forFeature([Gateway, Dvr]), UsersModule],
   controllers: [GatewaysController],
   providers: [GatewaysService, SiteProvisioningService, AdminGuard],
-  exports: [GatewaysService],
+  exports: [GatewaysService, SiteProvisioningService],
 })
 export class GatewaysModule {}
