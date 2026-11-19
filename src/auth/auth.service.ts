@@ -35,6 +35,17 @@ export class AuthService {
     return this.session(user);
   }
 
+  /** Changement de mot de passe de l'utilisateur connecté (mot de passe actuel exigé). */
+  async changePassword(userId: string, current: string, next: string) {
+    const repo = this.ds.getRepository(User);
+    const user = await repo.createQueryBuilder("u").addSelect("u.passwordHash").where("u.id = :userId", { userId }).getOne();
+    if (!user || !(await bcrypt.compare(current, user.passwordHash)))
+      throw new UnauthorizedException({ message: "Mot de passe actuel incorrect", code: "wrongPassword" });
+    if (current === next)
+      throw new ConflictException({ message: "Le nouveau mot de passe doit être différent de l'actuel", code: "samePassword" });
+    await repo.update({ id: userId }, { passwordHash: await bcrypt.hash(next, 12) });
+  }
+
   /**
    * Inscription d'un nouveau client : crée le client et son premier administrateur, puis ouvre la session.
    * Désactivable avec SIGNUP_ENABLED=false (ex. installation chez un seul client).

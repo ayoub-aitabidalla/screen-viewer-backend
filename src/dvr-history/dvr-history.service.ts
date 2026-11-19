@@ -104,15 +104,16 @@ export class DvrHistoryService implements OnApplicationBootstrap, OnModuleDestro
   async list(tenantId: string) {
     const [cams, dvrs] = await Promise.all([
       this.cameras.find({ where: { tenantId }, order: { name: "ASC" } }),
-      this.dvrRepo.find({ where: { tenantId }, select: { id: true, name: true } }),
+      this.dvrRepo.find({ where: { tenantId }, select: { id: true, name: true, gatewayId: true } }),
     ]);
-    const names = new Map(dvrs.map((d) => [d.id, d.name]));
+    const byId = new Map(dvrs.map((d) => [d.id, d]));
     return cams.map((c) => ({
       id: c.id,
       name: c.name,
       streamPath: c.streamPath,
       dvrId: c.dvrId,
-      dvrName: names.get(c.dvrId) ?? "",
+      dvrName: byId.get(c.dvrId)?.name ?? "",
+      gatewayId: byId.get(c.dvrId)?.gatewayId ?? null,
       channel: c.dvrChannelId,
     }));
   }

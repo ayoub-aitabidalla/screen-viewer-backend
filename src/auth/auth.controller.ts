@@ -9,6 +9,7 @@ import { AuthService } from "./auth.service";
 import type { JwtPayload } from "./jwt-auth.guard";
 import { LoginDto } from "./login.dto";
 import { SignupDto } from "./signup.dto";
+import { ChangePasswordDto } from "./change-password.dto";
 import { Public } from "./public.decorator";
 
 @Controller("auth")
@@ -57,6 +58,14 @@ export class AuthController {
   @HttpCode(204)
   logout(@Res({ passthrough: true }) res: Response) {
     res.clearCookie(AUTH_COOKIE, { path: "/" });
+  }
+
+  /** Changement du mot de passe de l'utilisateur connecté. Limité par IP comme la connexion. */
+  @UseGuards(AuthThrottlerGuard)
+  @Post("password")
+  @HttpCode(204)
+  async changePassword(@Req() req: Request & { user: JwtPayload }, @Body() dto: ChangePasswordDto) {
+    await this.auth.changePassword(req.user.sub, dto.currentPassword, dto.newPassword);
   }
 
   @Get("me")
